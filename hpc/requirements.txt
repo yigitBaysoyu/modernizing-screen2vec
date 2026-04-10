@@ -1,0 +1,3 @@
+GPUtil
+tensorflow[and-cuda]
+useckit==0.4.22

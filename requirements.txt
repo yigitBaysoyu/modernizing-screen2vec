@@ -1,0 +1,7 @@
+python-dotenv
+openai
+qwen-vl-utils
+transformers
+torch
+accelerate
+torchvision
