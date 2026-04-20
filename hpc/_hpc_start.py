@@ -49,8 +49,10 @@ def create_batches():
         })
 
     batches = [jobs[i:i + JOBS_PER_BATCH] for i in range(0, len(jobs), JOBS_PER_BATCH)]
+
     batches = [batches[0]]
     print("FIXME! Remove this line after debugging. We just use it here to have only a single batch running!")
+
     return batches
 
 
@@ -141,7 +143,7 @@ srun python env.py
 # EXECUTE MAIN WORKLOAD
 srun python qwen_generate_embeddings.py
 
-# Finalize results
+# Finish sending away results
 srun python mail.py
 """
 
@@ -191,7 +193,7 @@ def main():
     if total == 0:
         raise ValueError("No jobs (JOBS) found to submit.")
 
-    print(f"Submitting {len(batches)} SLURM array tasks...")
+    print(f"Submitting {len(batches)} SLURM tasks...")
 
     for arrayid, job in enumerate(batches):
         try:
