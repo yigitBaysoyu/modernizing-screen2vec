@@ -111,7 +111,7 @@ if __name__ == "__main__":
     to_glob = glob("../rico-data/data/combined/*json", recursive=True)
     to_glob = sorted(to_glob)
     
-    print("Loaded files (showing 10):", to_glob[:10])
+    print("Loaded files (showing first 10):", to_glob[:10])
     assert len(to_glob) > 1
 
     print("Loading model and processor... (This may take a while and requires ~16GB of VRAM/RAM for 8B)")
