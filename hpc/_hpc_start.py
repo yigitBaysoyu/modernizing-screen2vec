@@ -143,8 +143,12 @@ srun python hpc/env.py
 # EXECUTE MAIN WORKLOAD
 srun python qwen_generate_embeddings.py
 
+# Copy logs to hpc folder so mail.py can find them
+cp stdout_${{SLURM_ARRAY_JOB_ID}}_${{SLURM_ARRAY_TASK_ID}}.txt hpc/ 2>/dev/null || true
+cp stderr_${{SLURM_ARRAY_JOB_ID}}_${{SLURM_ARRAY_TASK_ID}}.txt hpc/ 2>/dev/null || true
+
 # Finish sending away results
-srun python hpc/mail.py
+cd hpc && srun python mail.py "${{SLURM_ARRAY_JOB_ID}}_${{SLURM_ARRAY_TASK_ID}}" "${{SLURM_JOB_NAME}}"
 """
 
     with open(path, "w") as f:
