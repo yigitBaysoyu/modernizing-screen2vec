@@ -59,9 +59,9 @@ def create_batches():
 # ==============================================================================
 # 4) CREATE AND SUBMIT JOB
 # ==============================================================================
-def get_hpc_slurm_directives(jobname: str, num_tasks: int = 0):
+def get_hpc_slurm_directives(jobname: str, num_tasks: int):
     """
-    Return #SBATCH script according to your HPC partition & runtarget preferences.
+    Return #SBATCH script
     """
     gres = ""
     partition = ""
@@ -118,12 +118,12 @@ def copy_folder(execution_id) -> Path:
     return target
 
 
-def create_sbatch_script(path, array_id):
+def create_sbatch_script(path, array_id, total_array_elements):
     """
     Write out the start.sh that will run via Slurm.
     """
     jobname = str(array_id)
-    sbatch_header = get_hpc_slurm_directives(jobname)
+    sbatch_header = get_hpc_slurm_directives(jobname, total_array_elements)
 
     script_content = f"""#!/bin/bash
 {sbatch_header}
@@ -160,7 +160,7 @@ def submit_sbatch(folder: Path):
     subprocess.run(["sbatch", "start.sh"], cwd=folder, check=True)
 
 
-def prepare_job(array_id: int, job: dict):
+def prepare_job(array_id: int, job: dict, total_array_elements: int):
     """
     1) Copy the entire codebase to a unique new folder
     2) Generate individual job.json encapsulating the job descriptions
@@ -175,7 +175,7 @@ def prepare_job(array_id: int, job: dict):
 
     # write down hpc start script (start.sh)
     slurm_script_path = dest_folder / "start.sh"
-    create_sbatch_script(slurm_script_path, array_id)
+    create_sbatch_script(slurm_script_path, array_id, total_array_elements)
 
     return dest_folder
 
@@ -197,7 +197,7 @@ def main():
 
     for arrayid, job in enumerate(batches):
         try:
-            new_folder = prepare_job(arrayid, job)
+            new_folder = prepare_job(arrayid, job, len(batches))
             submit_sbatch(new_folder)
         except FileNotFoundError as fe:
             print("Skipping exception ...", str(fe))
