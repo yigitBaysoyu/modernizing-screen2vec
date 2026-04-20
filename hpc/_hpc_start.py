@@ -11,39 +11,47 @@ from pathlib import Path
 # ==============================================================================
 
 # How many jobs out of the JOBS array each SLURM array task works on
-JOBS_PER_SLICE = 10000
+JOBS_PER_BATCH = 100
 
 # ==============================================================================
 # 2) HPC SETTINGS
 # ==============================================================================
-SCRATCH_ROOT = "/lustre/scratch/sgjolieb-screen2vec" if not platform.system() == "Windows" else "C:\\Users\\Jonathan\\Downloads"
-PROJECT_NAME = "screen2vec"
+SCRATCH_ROOT = "/lustre/scratch/sgjolieb-screen2vec" if not platform.system() == "Windows" else "C:\\Users\\Jonathan\\Dev"
+PROJECT_NAME = "s2v"
 DATA_DIR_NAME = "rico-data"
 runtarget = "gpu-big"  # or "gpu-small" / "cpu"
 run_exclusive = False  # or True if you want the entire node
-NUM_GPU: int = 1  # 1..4; how many GPUs to reserve
+NUM_GPU: int = 1  # 1..4; how many GPUs to reserve per job
 NOW = datetime.now()
 MAIL_FROM = "jonathan.liebers@uni-due.de"
 # ==============================================================================
 
 
 # ==============================================================================
-# 3) HPC CONFIG: Parameter space and parameters per job
+# 3) HPC CONFIG: Define jobs (i.e., elements in slurm's task array)
 # ==============================================================================
 
-JOBS = []
+def create_batches():
+    """Returns a list of batches. Each batch consists of one or more than one jobs and is executed by a single node
+    following the "embarassingly parallel" principle. Therefore, one batch is one element within slurm's task array and
+    contains a one or more than one atomic operations that is being executed by some node.
+    If we, for example, return 7 elements, then we expect 7 nodes in slurm working on it, by having created a task array
+    with 7 entries and each element contains one or many jobs."""
 
-for idx, g in enumerate(sorted(glob(f"{SCRATCH_ROOT}/{DATA_DIR_NAME}/data/combined/*json"))):
-    JOBS.append({
-        "task": "embed",
-        "json": g,
-        "image": g.replace('.json', '.jpg')
-    })
+    # holds return values
+    jobs = []
 
+    for idx, g in enumerate(sorted(glob(f"{SCRATCH_ROOT}/{DATA_DIR_NAME}/data/combined/*json"))):
+        jobs.append({
+            "task": "embed",
+            "json": g,
+            "image": g.replace('.json', '.jpg')
+        })
 
-# Added missing build_argument_list since it is called later
-def build_argument_list(parameters: dict):
-    return json.dumps(parameters)
+    batches = [jobs[i:i + JOBS_PER_BATCH] for i in range(0, len(jobs), JOBS_PER_BATCH)]
+    batches = [batches[0]]
+    print("FIXME! Remove this line after debugging. We just use it here to have only a single batch running!")
+    return batches
 
 
 # ==============================================================================
@@ -108,11 +116,11 @@ def copy_folder(execution_id) -> Path:
     return target
 
 
-def create_sbatch_script(path):
+def create_sbatch_script(path, array_id):
     """
     Write out the start.sh that will run via Slurm.
     """
-    jobname = "array"
+    jobname = str(array_id)
     sbatch_header = get_hpc_slurm_directives(jobname)
 
     script_content = f"""#!/bin/bash
@@ -124,26 +132,17 @@ cd $SLURM_SUBMIT_DIR
 # Load HPC modules
 module load anaconda3/2023
 
-# Optionally install requirements if needed
-# pip install -r requirements.txt
+# Install requirements
+pip install -r requirements.txt
 
 # Show environment
-srun python --version
+srun python env.py
 
-# Convert notebook to python only once on the first array task to prevent race conditions
-if [ "$SLURM_ARRAY_TASK_ID" -eq 0 ]; then
-    srun python qwen_generate_embeddings.py
-fi
+# EXECUTE MAIN WORKLOAD
+srun python qwen_generate_embeddings.py
 
-# Wait for the notebook conversion to finish before starting workers
-sleep 1
-
-# Run the specific slice of jobs for this array task
-bash chunks/chunk_${{SLURM_ARRAY_TASK_ID}}.sh
-
-# Move outputs
-cp stdout_${{SLURM_ARRAY_JOB_ID}}_${{SLURM_ARRAY_TASK_ID}}.txt .. 2>/dev/null || true
-cp stderr_${{SLURM_ARRAY_JOB_ID}}_${{SLURM_ARRAY_TASK_ID}}.txt .. 2>/dev/null || true
+# Finalize results
+srun python mail.py
 """
 
     with open(path, "w") as f:
@@ -159,24 +158,24 @@ def submit_sbatch(folder: Path):
     subprocess.run(["sbatch", "start.sh"], cwd=folder, check=True)
 
 
-def start_array_job(arrayid: int, job: dict):
+def prepare_job(array_id: int, job: dict):
     """
-    1) Copy the entire codebase to a unique folder in SCRATCH
-    2) Generate individual bash scripts for each chunk
-    3) Generate the HPC submission script
-    4) Submit the job array
+    1) Copy the entire codebase to a unique new folder
+    2) Generate individual job.json encapsulating the job descriptions
+    3) Generate the HPC submission script (start.sh)
     """
-    dest_folder = copy_folder(arrayid)
+    dest_folder = copy_folder(array_id)
 
     # write down job dict as `job.json`
     json_path = dest_folder / "job.json"
     with open(json_path, "w") as f:
         json.dump(job, f)
 
+    # write down hpc start script (start.sh)
     slurm_script_path = dest_folder / "start.sh"
+    create_sbatch_script(slurm_script_path, array_id)
 
-    create_sbatch_script(slurm_script_path)
-    submit_sbatch(dest_folder)
+    return dest_folder
 
 
 # ==============================================================================
@@ -185,21 +184,19 @@ def start_array_job(arrayid: int, job: dict):
 def main():
     global JOBS
 
-    JOBS = JOBS[:1000]  # FIXME
-
-    total = len(JOBS)
-    if total == 0:
-        print("No jobs (JOBS) found to submit.")
-        exit()
-
     # Slice the JOBS array based on the new JOBS_PER_SLICE parameter
-    jobs = [JOBS[i:i + JOBS_PER_SLICE] for i in range(0, total, JOBS_PER_SLICE)]
+    batches = create_batches()
 
-    print(f"Submitting {len(jobs)} SLURM array tasks...")
+    total = len(batches)
+    if total == 0:
+        raise ValueError("No jobs (JOBS) found to submit.")
 
-    for arrayid, job in enumerate(jobs):
+    print(f"Submitting {len(batches)} SLURM array tasks...")
+
+    for arrayid, job in enumerate(batches):
         try:
-            start_array_job(arrayid, job)
+            new_folder = prepare_job(arrayid, job)
+            submit_sbatch(new_folder)
         except FileNotFoundError as fe:
             print("Skipping exception ...", str(fe))
 
