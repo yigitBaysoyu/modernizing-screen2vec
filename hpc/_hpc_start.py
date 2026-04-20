@@ -185,7 +185,7 @@ def start_array_job(arrayid: int, job: dict):
 def main():
     global JOBS
 
-    JOBS = JOBS[:100]  # FIXME
+    JOBS = JOBS[:1000]  # FIXME
 
     total = len(JOBS)
     if total == 0:
