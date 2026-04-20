@@ -138,13 +138,13 @@ module load anaconda3/2023
 pip install -r requirements.txt
 
 # Show environment
-srun python env.py
+srun python hpc/env.py
 
 # EXECUTE MAIN WORKLOAD
 srun python qwen_generate_embeddings.py
 
 # Finish sending away results
-srun python mail.py
+srun python hpc/mail.py
 """
 
     with open(path, "w") as f:
