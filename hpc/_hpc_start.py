@@ -135,6 +135,7 @@ cd $SLURM_SUBMIT_DIR
 module load anaconda3/2023
 
 # Install requirements
+pip uninstall torch torchvision torchaudio -y
 pip install -r requirements.txt
 
 # Show environment
