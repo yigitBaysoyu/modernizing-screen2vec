@@ -65,7 +65,7 @@ def main():
     csv_files = [f for f in os.listdir(current_directory) if f.endswith('.csv')]
     if csv_files:
         csv_zip_filename = "csv_results.zip"
-        with zipfile.ZipFile(csv_zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        with zipfile.ZipFile(csv_zip_filename, 'w', zipfile.ZIP_LZMA) as zipf:
             for csv_file in csv_files:
                 zipf.write(csv_file)
         zip_files.append(csv_zip_filename)

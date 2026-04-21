@@ -11,7 +11,7 @@ from pathlib import Path
 # ==============================================================================
 
 # How many jobs out of the JOBS array each SLURM array task works on
-JOBS_PER_BATCH = 10000
+JOBS_PER_BATCH = 100
 
 # ==============================================================================
 # 2) HPC SETTINGS
