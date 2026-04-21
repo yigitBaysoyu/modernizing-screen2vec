@@ -1,3 +1,5 @@
+--extra-index-url https://download.pytorch.org/whl/cu124
+
 python-dotenv
 openai
 qwen-vl-utils
