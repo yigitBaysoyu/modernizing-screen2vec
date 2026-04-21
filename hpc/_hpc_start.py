@@ -23,6 +23,8 @@ runtarget = "gpu-big"  # or "gpu-small" / "cpu"
 run_exclusive = False  # or True if you want the entire node
 NUM_GPU: int = 1  # 1..4; how many GPUs to reserve per job
 NOW = datetime.now()
+# We define the timestamp once here to ensure all 7 folders share the exact same prefix
+NOW_STR = NOW.strftime('%Y-%m-%d-%H-%M-%S')
 MAIL_FROM = "jonathan.liebers@uni-due.de"
 # ==============================================================================
 
@@ -109,8 +111,7 @@ def copy_folder(execution_id) -> Path:
         # ignore all dot folders
         return {f for f in files if f.startswith('.')}
 
-    now_str = NOW.strftime('%Y-%m-%d-%H-%M-%S')
-    job_folder_name = f"{now_str}_{execution_id}"  # job name
+    job_folder_name = f"{NOW_STR}_{execution_id}"  # job name
     current_project_folder = Path.cwd().parent  # assuming running _hpc_start.py from /hpc subfolder
     target = Path(SCRATCH_ROOT) / job_folder_name
     print("Copying", current_project_folder, "->", target)
@@ -118,24 +119,25 @@ def copy_folder(execution_id) -> Path:
     return target
 
 
-def create_sbatch_script(path, array_id, total_array_elements):
+def create_master_sbatch_script(path, total_array_elements):
     """
-    Write out the start.sh that will run via Slurm.
+    Write out the master start.sh that handles the array.
     """
-    jobname = str(array_id)
-    sbatch_header = get_hpc_slurm_directives(jobname, total_array_elements)
+    sbatch_header = get_hpc_slurm_directives("array", total_array_elements)
 
     script_content = f"""#!/bin/bash
 {sbatch_header}
 
-# Move to the job directory
-cd $SLURM_SUBMIT_DIR
+# Construct the path to the specific task folder based on current array ID
+TASK_DIR="{SCRATCH_ROOT}/{NOW_STR}_${{SLURM_ARRAY_TASK_ID}}"
+
+# Move to the specific task directory
+cd $TASK_DIR
 
 # Load HPC modules
 module load anaconda3/2023
 
 # Install requirements
-#pip uninstall torch torchvision torchaudio -y
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 pip install -r requirements.txt
 
@@ -145,9 +147,9 @@ srun python hpc/env.py
 # EXECUTE MAIN WORKLOAD
 srun python qwen_generate_embeddings.py job.json
 
-# Copy logs to hpc folder so mail.py can find them
-cp stdout_${{SLURM_ARRAY_JOB_ID}}_${{SLURM_ARRAY_TASK_ID}}.txt hpc/ 2>/dev/null || true
-cp stderr_${{SLURM_ARRAY_JOB_ID}}_${{SLURM_ARRAY_TASK_ID}}.txt hpc/ 2>/dev/null || true
+# Copy logs from the submission directory (the first folder) to this task's hpc folder
+cp $SLURM_SUBMIT_DIR/stdout_${{SLURM_ARRAY_JOB_ID}}_${{SLURM_ARRAY_TASK_ID}}.txt hpc/ 2>/dev/null || true
+cp $SLURM_SUBMIT_DIR/stderr_${{SLURM_ARRAY_JOB_ID}}_${{SLURM_ARRAY_TASK_ID}}.txt hpc/ 2>/dev/null || true
 
 # Finish sending away results
 cd hpc && srun python mail.py "${{SLURM_ARRAY_JOB_ID}}_${{SLURM_ARRAY_TASK_ID}}" "${{SLURM_JOB_NAME}}"
@@ -157,20 +159,18 @@ cd hpc && srun python mail.py "${{SLURM_ARRAY_JOB_ID}}_${{SLURM_ARRAY_TASK_ID}}"
         f.write(script_content)
 
 
-def submit_sbatch(folder: Path):
+def submit_sbatch(script_path: Path):
     """
-    sbatch the 'start.sh' script from inside <folder>/hpc
+    sbatch the 'start.sh' script from its parent folder
     """
-    start_sh_path = folder / "start.sh"
-    print(f"Submitting job via `sbatch` in {start_sh_path}")
-    subprocess.run(["sbatch", "start.sh"], cwd=folder, check=True)
+    print(f"Submitting job via `sbatch` in {script_path}")
+    subprocess.run(["sbatch", script_path.name], cwd=script_path.parent, check=True)
 
 
-def prepare_job(array_id: int, job: dict, total_array_elements: int):
+def prepare_task_folder(array_id: int, job: dict):
     """
-    1) Copy the entire codebase to a unique new folder
-    2) Generate individual job.json encapsulating the job descriptions
-    3) Generate the HPC submission script (start.sh)
+    1) Copy the entire codebase to a unique subfolder
+    2) Generate individual job.json for this specific task
     """
     dest_folder = copy_folder(array_id)
 
@@ -179,10 +179,6 @@ def prepare_job(array_id: int, job: dict, total_array_elements: int):
     with open(json_path, "w") as f:
         json.dump(job, f)
 
-    # write down hpc start script (start.sh)
-    slurm_script_path = dest_folder / "start.sh"
-    create_sbatch_script(slurm_script_path, array_id, total_array_elements)
-
     return dest_folder
 
 
@@ -190,24 +186,35 @@ def prepare_job(array_id: int, job: dict, total_array_elements: int):
 # 4) MAIN
 # ==============================================================================
 def main():
-    global JOBS
-
-    # Slice the JOBS array based on the new JOBS_PER_SLICE parameter
     batches = create_batches()
-
     total = len(batches)
+    
     if total == 0:
         raise ValueError("No jobs (JOBS) found to submit.")
 
-    print(f"Submitting {len(batches)} SLURM tasks...")
+    print(f"Preparing {total} task folders...")
 
+    first_folder = None
+
+    # 1) Create all individual task folders
     for arrayid, job in enumerate(batches):
         try:
-            new_folder = prepare_job(arrayid, job, len(batches))
-            submit_sbatch(new_folder)
+            folder_path = prepare_task_folder(arrayid, job)
+            if arrayid == 0:
+                first_folder = folder_path
         except FileNotFoundError as fe:
-            print("Skipping exception ...", str(fe))
+            print("Skipping task due to error...", str(fe))
+
+    if not first_folder:
+        raise RuntimeError("Failed to create the primary task folder.")
+
+    # 2) Create the single master start script inside the FIRST copied folder
+    master_script_path = first_folder / "start.sh"
+    create_master_sbatch_script(master_script_path, total)
+
+    # 3) Submit the single array job from the first folder
+    submit_sbatch(master_script_path)
 
 if __name__ == "__main__":
     main()
-    print("All HPC jobs submitted.")
+    print("All HPC jobs submitted as a single array.")
