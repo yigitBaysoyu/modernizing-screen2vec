@@ -2,6 +2,7 @@ import os
 import sys
 import smtplib
 import shutil
+import zipfile
 from email.message import EmailMessage
 
 
@@ -60,9 +61,18 @@ def main():
     # Zip all folders that start with "_useckit"
     zip_files = zip_folders_with_prefix(current_directory, "_useckit")
 
-    # set body to stdout
-    with open(f"hpc/stderr_{sys.argv[1]}.txt") as stderr_file, open(f"hpc/stdout_{sys.argv[1]}.txt") as stdout_file:
-        body = stderr_file.read() + "\n=============================== \n\n" + stdout_file.read()
+    # Zip all .csv files found in the current directory into one archive
+    csv_files = [f for f in os.listdir(current_directory) if f.endswith('.csv')]
+    if csv_files:
+        csv_zip_filename = "csv_results.zip"
+        with zipfile.ZipFile(csv_zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for csv_file in csv_files:
+                zipf.write(csv_file)
+        zip_files.append(csv_zip_filename)
+
+    # set body to stdout then stderr
+    with open(f"hpc/stdout_{sys.argv[1]}.txt") as stdout_file, open(f"hpc/stderr_{sys.argv[1]}.txt") as stderr_file:
+        body = stdout_file.read() + "\n=============================== \n\n" + stderr_file.read()
 
     # Combine txt files and zipped folders for email attachments
     attachments = txt_files + zip_files
@@ -75,9 +85,13 @@ def main():
         # Remove the files after sending the email
         for file in attachments:
             try:
+                # Do not delete stdout and stderr files
+                if 'stdout' in file or 'stderr' in file:
+                    continue
+                
+                # Note: Original .csv files (like embedding.csv) are not in 'attachments', 
+                # only the created .zip files are. Thus, the original CSVs are safe.
                 os.remove(file)
-                os.remove(f"hpc/stderr_{sys.argv[1]}.txt")
-                os.remove(f"hpc/stdout_{sys.argv[1]}.txt")
             except FileNotFoundError as f:
                 print(f, "CWD is", os.getcwd(), file=sys.stderr)
     else:

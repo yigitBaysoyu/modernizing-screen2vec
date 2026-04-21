@@ -158,9 +158,13 @@ if __name__ == "__main__":
 
     csv_output_file = "embeddings.csv"
 
-    pbar = tqdm(to_glob)
-    for g in pbar:
-        pbar.set_description(f"Processing: {g}")
+    # Only update tqdm on 1% step
+    step_size = len(to_glob) // 100 or 1
+    pbar = tqdm(to_glob, miniters=step_size)
+    for i, g in enumerate(pbar):
+        if i % step_size == 0:
+            pbar.set_description(f"Processing: {g}")
+            
         json_path = g
         image_path = g.replace(".json", ".jpg")
 
