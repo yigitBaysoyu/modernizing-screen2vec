@@ -129,7 +129,7 @@ if __name__ == "__main__":
     print("Loading model and processor... (This may take a while and requires ~16GB of VRAM/RAM for 8B)")
     
     model_id = "../rico-data/models/qwen3-vl-embedding"
-    model_id = "./models/Qwen3-VL-Embedding-8B"
+    #model_id = "./models/Qwen3-VL-Embedding-8B"
 
     if not os.path.exists(model_id):
         print(f"\nLocal model not found at {model_id}")
