@@ -11,7 +11,7 @@ from pathlib import Path
 # ==============================================================================
 
 # How many jobs out of the JOBS array each SLURM array task works on
-JOBS_PER_BATCH = 100
+JOBS_PER_BATCH = 10000
 
 # ==============================================================================
 # 2) HPC SETTINGS
@@ -50,8 +50,8 @@ def create_batches():
 
     batches = [jobs[i:i + JOBS_PER_BATCH] for i in range(0, len(jobs), JOBS_PER_BATCH)]
 
-    batches = [batches[0]]
-    print("FIXME! Remove this line after debugging. We just use it here to have only a single batch running!")
+    #batches = [batches[0]]
+    #print("FIXME! Remove this line after debugging. We just use it here to have only a single batch running!")
 
     return batches
 
@@ -114,7 +114,7 @@ def copy_folder(execution_id) -> Path:
     current_project_folder = Path.cwd().parent  # assuming running _hpc_start.py from /hpc subfolder
     target = Path(SCRATCH_ROOT) / job_folder_name
     print("Copying", current_project_folder, "->", target)
-    shutil.copytree(current_project_folder, target, ignore=ignore_folders)
+    shutil.copytree(current_project_folder, target, ignore=ignore_folders, symlinks=True)
     return target
 
 
@@ -135,8 +135,8 @@ cd $SLURM_SUBMIT_DIR
 module load anaconda3/2023
 
 # Install requirements
-pip uninstall torch torchvision torchaudio -y
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124 --no-cache-dir
+#pip uninstall torch torchvision torchaudio -y
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 pip install -r requirements.txt
 
 # Show environment
