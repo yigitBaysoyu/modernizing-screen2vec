@@ -107,9 +107,14 @@ def main(json_path, image_path, model, processor):
 
 
 if __name__ == "__main__":
-    to_glob = glob("rico/examples/*.json")
-    to_glob = glob("../rico-data/data/combined/*json", recursive=True)
-    to_glob = sorted(to_glob)
+    if len(sys.argv) > 1:
+        with open(sys.argv[1], 'r', encoding='utf-8') as f:
+            job_data = json.load(f)
+        to_glob = [item["json"] for item in job_data]
+    else:
+        to_glob = glob("rico/examples/*.json")
+        to_glob = glob("../rico-data/data/combined/*json", recursive=True)
+        to_glob = sorted(to_glob)
     
     print("Loaded files (showing first 10):", to_glob[:10])
     assert len(to_glob) > 1
