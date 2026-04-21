@@ -141,7 +141,7 @@ pip install -r requirements.txt
 srun python hpc/env.py
 
 # EXECUTE MAIN WORKLOAD
-srun python qwen_generate_embeddings.py
+srun python qwen_generate_embeddings.py job.json
 
 # Copy logs to hpc folder so mail.py can find them
 cp stdout_${{SLURM_ARRAY_JOB_ID}}_${{SLURM_ARRAY_TASK_ID}}.txt hpc/ 2>/dev/null || true

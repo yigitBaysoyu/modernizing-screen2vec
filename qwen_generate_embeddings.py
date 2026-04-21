@@ -3,10 +3,12 @@ import json
 import sys
 import gc
 import csv
+import socket
 try:
     import fcntl
 except ImportError:
     fcntl = None
+
 import torch
 from transformers import AutoModel, AutoProcessor
 from qwen_vl_utils import process_vision_info
@@ -14,7 +16,8 @@ from glob import glob
 from tqdm import tqdm
 
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+if socket.gethostname().lower() == "hci-nc":
+    os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
 
