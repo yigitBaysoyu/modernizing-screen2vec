@@ -136,6 +136,7 @@ module load anaconda3/2023
 
 # Install requirements
 pip uninstall torch torchvision torchaudio -y
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124 --no-cache-dir
 pip install -r requirements.txt
 
 # Show environment
