@@ -4,6 +4,7 @@ import sys
 import gc
 import csv
 import socket
+import time
 try:
     import fcntl
 except ImportError:
@@ -110,6 +111,9 @@ def main(json_path, image_path, model, processor):
 
 
 if __name__ == "__main__":
+    start_time = time.time()
+    successful_embeddings_count = 0
+
     if len(sys.argv) > 1:
         with open(sys.argv[1], 'r', encoding='utf-8') as f:
             job_data = json.load(f)
@@ -168,3 +172,13 @@ if __name__ == "__main__":
         
         if embedding is not None:
             append_to_csv_safely(csv_output_file, g, embedding)
+            successful_embeddings_count += 1
+
+    end_time = time.time()
+    elapsed_seconds = int(end_time - start_time)
+    hours, remainder = divmod(elapsed_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    
+    print(f"\n--- Execution Summary ---")
+    print(f"Total time elapsed: {hours} hours, {minutes} minutes, {seconds} seconds")
+    print(f"Total embeddings performed: {successful_embeddings_count}")
