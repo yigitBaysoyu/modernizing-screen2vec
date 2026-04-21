@@ -50,8 +50,8 @@ def create_batches():
 
     batches = [jobs[i:i + JOBS_PER_BATCH] for i in range(0, len(jobs), JOBS_PER_BATCH)]
 
-    #batches = [batches[0]]
-    #print("FIXME! Remove this line after debugging. We just use it here to have only a single batch running!")
+    batches = [batches[0]]
+    print("FIXME! Remove this line after debugging. We just use it here to have only a single batch running!")
 
     return batches
 
