@@ -1,5 +1,24 @@
+import os
+import json
 from glob import glob
 import json
+
+import orjson
+import pandas as pd
+
+
+def load_embeddings_from_csv(filepath="../rico-data/embeddings/embeddings_qwen.csv"):
+    """Loads all pre-computed Qwen embeddings from the CSV file."""
+    df = pd.read_csv(filepath, names=["json-path", "embedding"], header=None)
+
+    # Convert string representation of list back to an actual Python list and fix paths
+    df["embedding"] = [orjson.loads(x) for x in df["embedding"]]
+    df["json-path"] = df["json-path"].apply(lambda x: x.replace("/lustre/scratch/sgjolieb-screen2vec", ".."))
+    df["jpg-path"] = df["json-path"].apply(lambda x: x.replace(".json", ".jpg"))
+
+    assert len(df) == 65795
+
+    return df
 
 
 def minify_json(json_data):
