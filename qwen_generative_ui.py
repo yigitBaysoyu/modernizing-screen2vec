@@ -295,6 +295,8 @@ def main():
         print(f"Critical error: {e}")
         return
 
+    print("Loaded data with length:", len(all_embeddings))
+
     # Split dataset: Use 80% for training
     train_size = int(len(all_embeddings) * 0.8)
     train_embeddings = all_embeddings.head(train_size)
