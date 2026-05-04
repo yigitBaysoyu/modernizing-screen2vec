@@ -3,3 +3,4 @@
 .vscode/
 .idea/
 *.pth
+__pycache__/*
