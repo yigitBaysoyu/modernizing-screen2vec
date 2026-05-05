@@ -249,7 +249,8 @@ def main():
     print("\n--- Starting Training Phase on CSV Data ---")
 
     num_epochs = 50
-    avg_layout_loss, avg_struct_loss = 0.0, 0.0
+    # Set to -1.0 so the very first print shows exactly -1.000000
+    avg_layout_loss, avg_struct_loss = -1.0, -1.0
 
     for epoch in range(num_epochs):
         layout_decoder.train()
@@ -260,7 +261,7 @@ def main():
 
         # --- TRAINING LOOP ---
         for i, row in tqdm(train_embeddings.iterrows(), total=len(train_embeddings),
-                           desc=f"Epoch {epoch + 1}/{num_epochs} | Train L-Loss: {avg_layout_loss:.4e} | Train S-Loss: {avg_struct_loss:.4e}"):
+                           desc=f"Epoch {epoch + 1}/{num_epochs} | Train Layout Loss: {avg_layout_loss:.6f} | Train Structure Loss: {avg_struct_loss:.6f}"):
 
             tgt_layout, tgt_json = parse_rico_json(row["json-path"], cfg)
             if tgt_layout is None or tgt_json is None or tgt_layout.size(1) <= 1 or tgt_json.size(1) <= 1:
@@ -333,7 +334,7 @@ def main():
         history['val_struct'].append(avg_val_struct)
 
         combined_val_loss = avg_val_layout + avg_val_struct
-        print(f" -> Validation Loss: Layout={avg_val_layout:.6f}, Struct={avg_val_struct:.6f}")
+        print(f" -> Validation Layout Loss: {avg_val_layout:.6f}, Validation Structure Loss: {avg_val_struct:.6f}")
 
         # --- EARLY STOPPING LOGIC ---
         if combined_val_loss < best_val_loss:
@@ -382,8 +383,8 @@ def main():
     plt.legend()
 
     plt.subplot(1, 2, 2)
-    plt.plot(history['train_struct'], label='Train Struct Loss', marker='o')
-    plt.plot(history['val_struct'], label='Val Struct Loss', marker='x')
+    plt.plot(history['train_struct'], label='Train Structure Loss', marker='o')
+    plt.plot(history['val_struct'], label='Val Structure Loss', marker='x')
     plt.title('Structural Decoder: Train vs Validation')
     plt.xlabel('Epochs')
     plt.ylabel('Cross Entropy Loss')
