@@ -91,7 +91,13 @@ def parse_rico_json(filepath, config):
             for child in node['children']:
                 traverse(child)
 
-    traverse(data)
+    # Locate the actual UI root in the RICO format
+    if 'activity' in data and 'root' in data['activity']:
+        ui_root = data['activity']['root']
+    else:
+        ui_root = data
+
+    traverse(ui_root)
 
     layout_tokens.append(config.eos_token_id)
     json_tokens.append(config.eos_token_id)
