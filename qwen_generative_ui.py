@@ -8,7 +8,7 @@ import pandas as pd
 from tqdm import tqdm
 
 
-os.environ["CUDA_VISIBLE_DEVICES"] = str(4)
+os.environ["CUDA_VISIBLE_DEVICES"] = str(3)
 
 
 
