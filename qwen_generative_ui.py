@@ -3,6 +3,7 @@ import json
 import orjson
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import pandas as pd
 from tqdm import tqdm
 
@@ -307,8 +308,8 @@ def main():
     structural_decoder = StructuralDecoder(cfg).to(device)
 
     # Optimizers
-    opt_layout = torch.optim.Adam(layout_decoder.parameters(), lr=0.001)
-    opt_struct = torch.optim.Adam(structural_decoder.parameters(), lr=0.001)
+    opt_layout = torch.optim.Adam(layout_decoder.parameters(), lr=1e-4)
+    opt_struct = torch.optim.Adam(structural_decoder.parameters(), lr=1e-4)
     criterion = nn.CrossEntropyLoss(ignore_index=cfg.pad_token_id)
 
     print("\n--- Starting Training Phase on CSV Data ---")
@@ -333,11 +334,18 @@ def main():
 
             tgt_layout, tgt_json = tgt_layout.to(device), tgt_json.to(device)
 
+            # Safeguard against empty or extremely short sequences causing dimension collapse
+            if tgt_layout.size(1) <= 1 or tgt_json.size(1) <= 1:
+                continue
+
             # Convert pandas list to tensor if it isn't one already
             if not torch.is_tensor(row["embedding"]):
                 latent_vec = torch.tensor(row["embedding"], dtype=torch.float32).unsqueeze(0).to(device)
             else:
                 latent_vec = row["embedding"].unsqueeze(0).to(device)
+
+            # Normalize the high-dimensional vector to prevent exploding gradients (NaN)
+            latent_vec = F.normalize(latent_vec, p=2, dim=-1)
 
             valid_samples += 1
 
@@ -348,6 +356,7 @@ def main():
             loss_layout = criterion(layout_logits[:, :-1, :].reshape(-1, cfg.layout_vocab_size),
                                     tgt_layout[:, 1:].reshape(-1))
             loss_layout.backward()
+            torch.nn.utils.clip_grad_norm_(layout_decoder.parameters(), max_norm=1.0)
             opt_layout.step()
             layout_loss_total += loss_layout.item()
 
@@ -358,6 +367,7 @@ def main():
             loss_struct = criterion(json_logits[:, :-1, :].reshape(-1, cfg.json_vocab_size),
                                     tgt_json[:, 1:].reshape(-1))
             loss_struct.backward()
+            torch.nn.utils.clip_grad_norm_(structural_decoder.parameters(), max_norm=1.0)
             opt_struct.step()
             struct_loss_total += loss_struct.item()
 
