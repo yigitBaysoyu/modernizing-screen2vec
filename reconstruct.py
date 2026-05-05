@@ -8,6 +8,8 @@ import pandas as pd
 import argparse
 import difflib
 
+os.environ["CUDA_VISIBLE_DEVICES"] = str(3)
+
 
 # =============================================================================
 # Configuration (Must exactly match training script)
@@ -269,6 +271,18 @@ def main():
     pred_layout_decoded = decode_layout_tokens(gen_layout_tokens, cfg)
     pred_struct_decoded = decode_json_tokens(gen_struct_tokens, cfg)
 
+    # Merge structural and layout predictions into a mock raw JSON for side-by-side comparison
+    pred_merged_str = ""
+    try:
+        struct_data = json.loads(pred_struct_decoded)
+        for i, child in enumerate(struct_data.get("children", [])):
+            if i < len(pred_layout_decoded):
+                child["class"] = pred_layout_decoded[i].get("class_id", "Unknown")
+                child["bounds"] = pred_layout_decoded[i].get("bbox", [])
+        pred_merged_str = json.dumps(struct_data, indent=2)
+    except Exception as e:
+        pred_merged_str = json.dumps({"error": f"Merge failed: {e}"})
+
     gt_layout_tokens, gt_struct_tokens = parse_rico_json(json_path, cfg)
     if not gt_layout_tokens:
         print("[-] Error: Could not read Ground Truth JSON file to compare metrics.")
@@ -289,24 +303,27 @@ def main():
     struct_acc = sum(1 for i in range(min_s_len) if gen_struct_tokens[i] == gt_struct_tokens[i]) / max(1,
                                                                                                        len(gt_struct_tokens))
 
-    print("\n" + "=" * 50)
-    print("                EVALUATION REPORT")
-    print("=" * 50)
+    print("\n" + "=" * 115)
+    print(" " * 45 + "EVALUATION REPORT")
+    print("=" * 115)
 
-    print("\n[ GROUND TRUTH JSON (Raw, truncated to 1500 chars) ]")
-    print(raw_json_str[:1500] + ("...\n(truncated)" if len(raw_json_str) > 1500 else ""))
+    # Side-by-Side Formatting
+    col_width = 55
+    left_str = raw_json_str[:1500] + ("...\n(truncated)" if len(raw_json_str) > 1500 else "")
+    right_str = pred_merged_str[:1500] + ("...\n(truncated)" if len(pred_merged_str) > 1500 else "")
 
-    print("\n[ GROUND TRUTH STRUCTURE (Parsed) ]")
-    print(gt_struct_decoded[:500] + ("...\n(truncated)" if len(gt_struct_decoded) > 500 else ""))
+    left_lines = left_str.split("\n")
+    right_lines = right_str.split("\n")
+    max_lines = max(len(left_lines), len(right_lines))
 
-    print("\n[ PREDICTED STRUCTURE ]")
-    print(pred_struct_decoded[:500] + ("...\n(truncated)" if len(pred_struct_decoded) > 500 else ""))
-
-    print("\n[ GROUND TRUTH LAYOUT (First 3 elements) ]")
-    print(json.dumps(gt_layout_decoded[:3], indent=2))
-
-    print("\n[ PREDICTED LAYOUT (First 3 elements) ]")
-    print(json.dumps(pred_layout_decoded[:3], indent=2))
+    print(f"\n{'-' * 115}")
+    print(f"{'GROUND TRUTH (Raw JSON)':<{col_width}} | {'PREDICTION (Merged JSON)':<{col_width}}")
+    print(f"{'-' * 115}")
+    for i in range(max_lines):
+        l = left_lines[i][:col_width] if i < len(left_lines) else ""
+        r = right_lines[i][:col_width] if i < len(right_lines) else ""
+        print(f"{l:<{col_width}} | {r:<{col_width}}")
+    print(f"{'-' * 115}\n")
 
     print("\n" + "-" * 50)
     print("METRICS:")
