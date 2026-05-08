@@ -9,213 +9,15 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 from datetime import datetime
 
-os.environ["CUDA_VISIBLE_DEVICES"] = str(3)
+from utils import (Config, LayoutDecoder, StructuralDecoder, parse_rico_json,
+                   decode_layout_tokens, decode_json_tokens, load_embeddings_from_csv, CUDA_VISIBLE_DEVICE)
 
+os.environ["CUDA_VISIBLE_DEVICES"] = CUDA_VISIBLE_DEVICE
 
 # =============================================================================
-# Configuration & Hyperparameters
+# Configuration Initialization
 # =============================================================================
-class Config:
-    qwen_embed_dim = 4096
-
-    layout_vocab_size = 1100
-    layout_hidden_dim = 512
-    layout_num_layers = 4
-    layout_num_heads = 8
-    max_layout_seq_len = 500
-
-    json_vocab_size = 2000
-    json_hidden_dim = 512
-    json_num_layers = 4
-    json_num_heads = 8
-    max_json_seq_len = 1000
-
-    pad_token_id = 0
-    sos_token_id = 1
-    eos_token_id = 2
-
-
 cfg = Config()
-
-
-# =============================================================================
-# Phase 1: Data Prep & Latent Space Loading
-# =============================================================================
-def load_embeddings_from_csv(filepath):
-    if not os.path.exists(filepath):
-        raise FileNotFoundError(f"Error: The required file '{filepath}' was not found. Execution aborted.")
-
-    df = pd.read_csv(filepath, names=["json-path", "embedding"], header=None)
-    df["embedding"] = [orjson.loads(x) for x in df["embedding"]]
-    df["json-path"] = df["json-path"].apply(lambda x: x.replace("/lustre/scratch/sgjolieb-screen2vec", ".."))
-
-    print(f"Successfully loaded {len(df)} embeddings.")
-    return df
-
-
-def parse_rico_json(filepath, config):
-    if not os.path.exists(filepath):
-        return None, None
-
-    with open(filepath, 'r', encoding='utf-8') as f:
-        try:
-            data = json.load(f)
-        except json.JSONDecodeError:
-            return None, None
-
-    layout_tokens = [config.sos_token_id]
-    json_tokens = [config.sos_token_id]
-
-    def traverse(node):
-        if not isinstance(node, dict):
-            return
-
-        if 'bounds' in node:
-            b = node['bounds']
-            for val in b:
-                bin_val = max(0, min(999, int(val))) + 3
-                if len(layout_tokens) < config.max_layout_seq_len - 2:
-                    layout_tokens.append(bin_val)
-
-            ui_class = node.get('class', 'Unknown')
-            class_id = (hash(ui_class) % 96) + 1003
-            if len(layout_tokens) < config.max_layout_seq_len - 2:
-                layout_tokens.append(class_id)
-
-        node_type = node.get('class', 'Unknown')
-        token_hash = (hash(node_type) % (config.json_vocab_size - 3)) + 3
-        if len(json_tokens) < config.max_json_seq_len - 2:
-            json_tokens.append(token_hash)
-
-        if 'children' in node:
-            for child in node['children']:
-                traverse(child)
-
-    # Locate the actual UI root in the RICO format
-    if 'activity' in data and 'root' in data['activity']:
-        ui_root = data['activity']['root']
-    else:
-        ui_root = data
-
-    traverse(ui_root)
-
-    layout_tokens.append(config.eos_token_id)
-    json_tokens.append(config.eos_token_id)
-
-    tgt_layout = torch.tensor(layout_tokens, dtype=torch.long).unsqueeze(0)
-    tgt_json = torch.tensor(json_tokens, dtype=torch.long).unsqueeze(0)
-
-    return tgt_layout, tgt_json
-
-
-# =============================================================================
-# Phase 2 & 3: Decoders
-# =============================================================================
-class LayoutDecoder(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.condition_proj = nn.Linear(config.qwen_embed_dim, config.layout_hidden_dim)
-        self.embedding = nn.Embedding(config.layout_vocab_size, config.layout_hidden_dim)
-        self.pos_encoder = nn.Embedding(config.max_layout_seq_len, config.layout_hidden_dim)
-        decoder_layer = nn.TransformerDecoderLayer(d_model=config.layout_hidden_dim, nhead=config.layout_num_heads,
-                                                   batch_first=True)
-        self.transformer_decoder = nn.TransformerDecoder(decoder_layer, config.layout_num_layers)
-        self.fc_out = nn.Linear(config.layout_hidden_dim, config.layout_vocab_size)
-        self.config = config
-
-    def forward(self, qwen_latent, tgt_seq, tgt_mask=None):
-        B, seq_len = tgt_seq.size()
-        condition = self.condition_proj(qwen_latent).unsqueeze(1)
-        positions = torch.arange(0, seq_len, device=tgt_seq.device).unsqueeze(0).expand(B, seq_len)
-        tgt_emb = self.embedding(tgt_seq) + self.pos_encoder(positions)
-        output = self.transformer_decoder(tgt_emb, condition, tgt_mask=tgt_mask)
-        return self.fc_out(output)
-
-    def generate(self, qwen_latent, max_length=100):
-        B = qwen_latent.size(0)
-        device = qwen_latent.device
-        current_seq = torch.full((B, 1), self.config.sos_token_id, dtype=torch.long, device=device)
-
-        for _ in range(max_length):
-            seq_len = current_seq.size(1)
-            tgt_mask = nn.Transformer.generate_square_subsequent_mask(seq_len).to(device)
-            logits = self(qwen_latent, current_seq, tgt_mask=tgt_mask)
-            next_token = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
-            current_seq = torch.cat([current_seq, next_token], dim=1)
-            if (next_token == self.config.eos_token_id).all():
-                break
-        return current_seq
-
-
-class StructuralDecoder(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.condition_proj = nn.Sequential(
-            nn.Linear(config.qwen_embed_dim, config.json_hidden_dim * 2),
-            nn.GELU(),
-            nn.Linear(config.json_hidden_dim * 2, config.json_hidden_dim)
-        )
-        self.embedding = nn.Embedding(config.json_vocab_size, config.json_hidden_dim)
-        self.pos_encoder = nn.Embedding(config.max_json_seq_len, config.json_hidden_dim)
-        decoder_layer = nn.TransformerDecoderLayer(d_model=config.json_hidden_dim, nhead=config.json_num_heads,
-                                                   batch_first=True)
-        self.transformer_decoder = nn.TransformerDecoder(decoder_layer, config.json_num_layers)
-        self.fc_out = nn.Linear(config.json_hidden_dim, config.json_vocab_size)
-        self.config = config
-
-    def forward(self, qwen_latent, tgt_seq, tgt_mask=None):
-        B, seq_len = tgt_seq.size()
-        condition = self.condition_proj(qwen_latent).unsqueeze(1)
-        positions = torch.arange(0, seq_len, device=tgt_seq.device).unsqueeze(0).expand(B, seq_len)
-        tgt_emb = self.embedding(tgt_seq) + self.pos_encoder(positions)
-        output = self.transformer_decoder(tgt_emb, condition, tgt_mask=tgt_mask)
-        return self.fc_out(output)
-
-    def generate(self, qwen_latent, max_length=200):
-        B = qwen_latent.size(0)
-        device = qwen_latent.device
-        current_seq = torch.full((B, 1), self.config.sos_token_id, dtype=torch.long, device=device)
-
-        for _ in range(max_length):
-            seq_len = current_seq.size(1)
-            tgt_mask = nn.Transformer.generate_square_subsequent_mask(seq_len).to(device)
-            logits = self(qwen_latent, current_seq, tgt_mask=tgt_mask)
-            next_token = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
-            current_seq = torch.cat([current_seq, next_token], dim=1)
-            if (next_token == self.config.eos_token_id).all():
-                break
-        return current_seq
-
-
-# =============================================================================
-# Decoding Functions
-# =============================================================================
-def decode_layout_tokens(token_list, config):
-    decoded_boxes = []
-    tokens = token_list[1:] if token_list and token_list[0] == config.sos_token_id else token_list
-    for i in range(0, len(tokens), 5):
-        chunk = tokens[i:i + 5]
-        if config.eos_token_id in chunk:
-            break
-        if len(chunk) == 5:
-            x1, y1, x2, y2 = [val - 3 for val in chunk[:4]]
-            cls_id = chunk[4]
-            box = {"class_id": f"UI_Element_{cls_id}", "bbox": [min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)]}
-            decoded_boxes.append(box)
-    return decoded_boxes
-
-
-def decode_json_tokens(token_list, config):
-    tokens = token_list[1:] if token_list and token_list[0] == config.sos_token_id else token_list
-    elements = []
-    for t in tokens:
-        if t == config.eos_token_id:
-            break
-        if t not in [config.pad_token_id]:
-            node_type = "container" if t % 2 == 0 else "component"
-            elements.append({"node_id": t, "type": node_type})
-    mock_tree = {"type": "root", "children": elements}
-    return json.dumps(mock_tree, indent=2)
 
 
 # =============================================================================
@@ -270,10 +72,12 @@ def main():
                            desc=f"Epoch {epoch + 1}/{num_epochs} | Train Layout Loss: {avg_layout_loss:.6f} | Train Structure Loss: {avg_struct_loss:.6f}"):
 
             tgt_layout, tgt_json = parse_rico_json(row["json-path"], cfg)
-            if tgt_layout is None or tgt_json is None or tgt_layout.size(1) <= 1 or tgt_json.size(1) <= 1:
+            if tgt_layout is None or tgt_json is None or len(tgt_layout) <= 1 or len(tgt_json) <= 1:
                 continue
 
-            tgt_layout, tgt_json = tgt_layout.to(device), tgt_json.to(device)
+            tgt_layout = torch.tensor(tgt_layout, dtype=torch.long).unsqueeze(0).to(device)
+            tgt_json = torch.tensor(tgt_json, dtype=torch.long).unsqueeze(0).to(device)
+
             latent_vec = torch.tensor(row["embedding"], dtype=torch.float32).unsqueeze(0).to(
                 device) if not torch.is_tensor(row["embedding"]) else row["embedding"].unsqueeze(0).to(device)
             latent_vec = F.normalize(latent_vec, p=2, dim=-1)
@@ -313,10 +117,12 @@ def main():
         with torch.no_grad():
             for i, row in tqdm(val_embeddings.iterrows(), total=len(val_embeddings), desc="Validating", leave=False):
                 tgt_layout, tgt_json = parse_rico_json(row["json-path"], cfg)
-                if tgt_layout is None or tgt_json is None or tgt_layout.size(1) <= 1 or tgt_json.size(1) <= 1:
+                if tgt_layout is None or tgt_json is None or len(tgt_layout) <= 1 or len(tgt_json) <= 1:
                     continue
 
-                tgt_layout, tgt_json = tgt_layout.to(device), tgt_json.to(device)
+                tgt_layout = torch.tensor(tgt_layout, dtype=torch.long).unsqueeze(0).to(device)
+                tgt_json = torch.tensor(tgt_json, dtype=torch.long).unsqueeze(0).to(device)
+
                 latent_vec = torch.tensor(row["embedding"], dtype=torch.float32).unsqueeze(0).to(
                     device) if not torch.is_tensor(row["embedding"]) else row["embedding"].unsqueeze(0).to(device)
                 latent_vec = F.normalize(latent_vec, p=2, dim=-1)
