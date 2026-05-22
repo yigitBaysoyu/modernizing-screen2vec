@@ -1,3 +1,11 @@
+# Main Reconstruction Script.
+# Requires:
+#   - Trained layout decoder (.pth)
+#   - Trained structural decoder (.pth)
+#   - Path to embeddings CSV
+#   - Index of the embedding to reconstruct
+# to perform a reconstruction and to report metrics of comparison of original vs predicted.
+
 import os
 import json
 import orjson

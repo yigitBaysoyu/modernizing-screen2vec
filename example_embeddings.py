@@ -1,3 +1,5 @@
+# A very basic example file showing how to get embedding from SAIA cloud
+
 import os
 from openai import OpenAI
 from dotenv import load_dotenv

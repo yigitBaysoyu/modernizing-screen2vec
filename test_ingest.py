@@ -3,100 +3,9 @@ import json
 import argparse
 import pandas as pd
 
-
-# =============================================================================
-# Configuration (Matches training script)
-# =============================================================================
-class Config:
-    layout_vocab_size = 1100
-    json_vocab_size = 2000
-    max_layout_seq_len = 500
-    max_json_seq_len = 1000
-    pad_token_id = 0
-    sos_token_id = 1
-    eos_token_id = 2
-
+from utils import Config, parse_rico_json, decode_layout_tokens, decode_json_tokens
 
 cfg = Config()
-
-
-# =============================================================================
-# Core Traversal & Parsing (The EXACT logic the model uses)
-# =============================================================================
-def parse_rico_json(filepath, config):
-    if not os.path.exists(filepath):
-        return None, None, "File not found"
-
-    with open(filepath, 'r', encoding='utf-8') as f:
-        try:
-            data = json.load(f)
-        except json.JSONDecodeError:
-            return None, None, "Invalid JSON"
-
-    layout_tokens = [config.sos_token_id]
-    json_tokens = [config.sos_token_id]
-
-    def traverse(node):
-        if not isinstance(node, dict): return
-
-        # --- 1. Layout Extraction ---
-        if 'bounds' in node:
-            # Clamp coordinates and apply offset
-            for val in node['bounds']:
-                layout_tokens.append(max(0, min(999, int(val))) + 3)
-
-            # Map UI Class to vocabulary
-            ui_class = node.get('class', 'Unknown')
-            layout_tokens.append((hash(ui_class) % 96) + 1003)
-
-        # --- 2. Structure Extraction ---
-        node_type = node.get('class', 'Unknown')
-        json_tokens.append((hash(node_type) % (config.json_vocab_size - 3)) + 3)
-
-        # --- 3. Recursive Call ---
-        if 'children' in node:
-            for child in node['children']:
-                traverse(child)
-
-    # Locate the actual UI root in the RICO format (The Fix)
-    if 'activity' in data and 'root' in data['activity']:
-        ui_root = data['activity']['root']
-    else:
-        ui_root = data
-
-    traverse(ui_root)
-    layout_tokens.append(config.eos_token_id)
-    json_tokens.append(config.eos_token_id)
-
-    return layout_tokens, json_tokens, data
-
-
-# =============================================================================
-# Decoding logic (To make tokens human-readable)
-# =============================================================================
-def decode_layout_tokens(token_list, config):
-    decoded_boxes = []
-    tokens = token_list[1:] if token_list and token_list[0] == config.sos_token_id else token_list
-    for i in range(0, len(tokens), 5):
-        chunk = tokens[i:i + 5]
-        if config.eos_token_id in chunk: break
-        if len(chunk) == 5:
-            x1, y1, x2, y2 = [val - 3 for val in chunk[:4]]
-            cls_id = chunk[4]
-            decoded_boxes.append(
-                {"class_id": f"UI_Element_{cls_id}", "bbox": [min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)]})
-    return decoded_boxes
-
-
-def decode_json_tokens(token_list, config):
-    tokens = token_list[1:] if token_list and token_list[0] == config.sos_token_id else token_list
-    elements = []
-    for t in tokens:
-        if t == config.eos_token_id: break
-        if t not in [config.pad_token_id]:
-            node_type = "container" if t % 2 == 0 else "component"
-            elements.append({"node_id": t, "type": node_type})
-    return json.dumps({"type": "root", "children": elements}, indent=2)
 
 
 # =============================================================================
@@ -126,10 +35,18 @@ def main():
 
     print(f"[*] Extracting data for index {args.index} -> {json_path}\n")
 
-    layout_tokens, struct_tokens, raw_data = parse_rico_json(json_path, cfg)
+    layout_tokens, struct_tokens = parse_rico_json(json_path, cfg)
 
-    if raw_data is None:
-        print(f"[-] Error parsing JSON: {raw_data}")
+    if layout_tokens is None or struct_tokens is None:
+        print("[-] Error parsing JSON: tokens are None")
+        return
+
+    # Load raw data for reporting
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            raw_data = json.load(f)
+    except Exception as e:
+        print(f"[-] Error loading raw JSON: {e}")
         return
 
     # Decode tokens back to readable format

@@ -1,3 +1,5 @@
+# Trains the adapter to adapt embedding space to reconstruction space.
+
 import os
 import json
 import orjson

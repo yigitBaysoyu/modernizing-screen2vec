@@ -1,3 +1,5 @@
+# Generates the embeddings using Model QWEN VLM Embedder.
+
 import os
 import json
 import sys

@@ -124,6 +124,28 @@ def parse_rico_json(filepath, config):
         except json.JSONDecodeError:
             return None, None
 
+    # Locate the actual UI root in the RICO format
+    if 'activity' in data and 'root' in data['activity']:
+        ui_root = data['activity']['root']
+    else:
+        ui_root = data
+
+    # Extract device screen size from root bounds
+    screen_width = 1080
+    screen_height = 1920
+    if isinstance(ui_root, dict) and 'bounds' in ui_root:
+        bounds = ui_root['bounds']
+        if isinstance(bounds, list) and len(bounds) == 4:
+            try:
+                screen_width = int(bounds[2]) - int(bounds[0])
+                screen_height = int(bounds[3]) - int(bounds[1])
+            except (ValueError, TypeError):
+                pass
+    if screen_width <= 0:
+        screen_width = 1080
+    if screen_height <= 0:
+        screen_height = 1920
+
     layout_tokens = [config.sos_token_id]
     json_tokens = [config.sos_token_id]
 
@@ -133,15 +155,25 @@ def parse_rico_json(filepath, config):
 
         if 'bounds' in node:
             b = node['bounds']
-            for val in b:
-                bin_val = max(0, min(999, int(val))) + 3
-                if len(layout_tokens) < config.max_layout_seq_len - 2:
-                    layout_tokens.append(bin_val)
+            if isinstance(b, list) and len(b) == 4:
+                for idx, val in enumerate(b):
+                    try:
+                        val_num = int(val)
+                    except (ValueError, TypeError):
+                        val_num = 0
+                    
+                    # 0 or 2 -> X (width), 1 or 3 -> Y (height)
+                    denom = screen_width if idx % 2 == 0 else screen_height
+                    pct = round((val_num / denom) * 100)
+                    bin_val = max(0, min(100, pct)) + 3
+                    
+                    if len(layout_tokens) < config.max_layout_seq_len - 2:
+                        layout_tokens.append(bin_val)
 
-            ui_class = node.get('class', 'Unknown')
-            class_id = (hash(ui_class) % 96) + 1003
-            if len(layout_tokens) < config.max_layout_seq_len - 2:
-                layout_tokens.append(class_id)
+                ui_class = node.get('class', 'Unknown')
+                class_id = (hash(ui_class) % 96) + 1003
+                if len(layout_tokens) < config.max_layout_seq_len - 2:
+                    layout_tokens.append(class_id)
 
         node_type = node.get('class', 'Unknown')
         token_hash = (hash(node_type) % (config.json_vocab_size - 3)) + 3
@@ -151,12 +183,6 @@ def parse_rico_json(filepath, config):
         if 'children' in node:
             for child in node['children']:
                 traverse(child)
-
-    # Locate the actual UI root in the RICO format
-    if 'activity' in data and 'root' in data['activity']:
-        ui_root = data['activity']['root']
-    else:
-        ui_root = data
 
     traverse(ui_root)
 
