@@ -8,7 +8,7 @@ import csv
 import socket
 import time
 
-from utils import minify_json
+from utils import _minify_json
 
 try:
     import fcntl
@@ -73,7 +73,7 @@ def main(json_path, image_path, model, processor):
                 {
                     "type": "text",
                     #"text": f"Represent this UI component and its context: {json_content}",
-                    "text": f"{minify_json(json_content)}",
+                    "text": f"{_minify_json(json_content)}",
                 },
             ],
         }

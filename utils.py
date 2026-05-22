@@ -114,85 +114,148 @@ class StructuralDecoder(nn.Module):
 # =============================================================================
 # Shared Functions & Parsers
 # =============================================================================
-def parse_rico_json(filepath, config):
-    if not os.path.exists(filepath):
-        return None, None
+def process_json_file(json_path,
+                      binning=True,
+                      reduce=True,
+                      minify=True):
+    """
+    Processes RICO JSON data for embeddings based on the flatten switch.
+    If flatten is False, it returns the minified JSON string.
+    If flatten is True, it returns the flattened semantic text.
+    """
+    assert os.path.exists(json_path), f"Could not find path: {json_path}"
 
-    with open(filepath, 'r', encoding='utf-8') as f:
-        try:
-            data = json.load(f)
-        except json.JSONDecodeError:
-            return None, None
+    with open(json_path, 'r') as f:
+        json_data = json.load(f)
 
-    # Locate the actual UI root in the RICO format
-    if 'activity' in data and 'root' in data['activity']:
-        ui_root = data['activity']['root']
+    # all of this operates on a dict
+    if binning:
+        json_data = _bin_json_coordinates(json_data)
+    if reduce:
+        json_data = _reduce_json_nodes(json_data)
+    if minify:
+        return _minify_json(json_data)
     else:
-        ui_root = data
+        return json.dumps(json_data, indent=2)
 
-    # Extract device screen size from root bounds
-    screen_width = 1080
-    screen_height = 1920
-    if isinstance(ui_root, dict) and 'bounds' in ui_root:
-        bounds = ui_root['bounds']
-        if isinstance(bounds, list) and len(bounds) == 4:
-            try:
-                screen_width = int(bounds[2]) - int(bounds[0])
-                screen_height = int(bounds[3]) - int(bounds[1])
-            except (ValueError, TypeError):
-                pass
-    if screen_width <= 0:
-        screen_width = 1080
-    if screen_height <= 0:
-        screen_height = 1920
 
-    layout_tokens = [config.sos_token_id]
-    json_tokens = [config.sos_token_id]
+def _bin_json_coordinates(json_data):
+    """
+    Replaces absolute pixel coordinates with binned percentages (1-100)
+    based on the maximum dimensions found in the JSON data.
+    """
+    root_node = json_data.get('activity', {}).get('root', {}) if isinstance(json_data, dict) else json_data
 
-    def traverse(node):
+    max_x = 1
+    max_y = 1
+
+    def _find_max_bounds(node):
+        nonlocal max_x, max_y
         if not isinstance(node, dict):
             return
-
         if 'bounds' in node:
             b = node['bounds']
             if isinstance(b, list) and len(b) == 4:
+                try:
+                    x2 = int(b[2])
+                    y2 = int(b[3])
+                    if x2 > max_x: max_x = x2
+                    if y2 > max_y: max_y = y2
+                except (ValueError, TypeError):
+                    pass
+
+        if 'children' in node and isinstance(node['children'], list):
+            for child in node['children']:
+                _find_max_bounds(child)
+
+    _find_max_bounds(root_node)
+
+    screen_width = max_x
+    screen_height = max_y
+
+    def _apply_binning(node):
+        if not isinstance(node, dict):
+            return
+        if 'bounds' in node:
+            b = node['bounds']
+            if isinstance(b, list) and len(b) == 4:
+                reduced_bounds = []
                 for idx, val in enumerate(b):
                     try:
                         val_num = int(val)
                     except (ValueError, TypeError):
                         val_num = 0
-                    
-                    # 0 or 2 -> X (width), 1 or 3 -> Y (height)
+
                     denom = screen_width if idx % 2 == 0 else screen_height
+                    if denom <= 0:
+                        denom = 1
+
                     pct = round((val_num / denom) * 100)
-                    bin_val = max(0, min(100, pct)) + 3
-                    
-                    if len(layout_tokens) < config.max_layout_seq_len - 2:
-                        layout_tokens.append(bin_val)
+                    pct_clamped = max(1, min(100, pct))
+                    reduced_bounds.append(pct_clamped)
+                node['bounds'] = reduced_bounds
 
-                ui_class = node.get('class', 'Unknown')
-                class_id = (hash(ui_class) % 96) + 1003
-                if len(layout_tokens) < config.max_layout_seq_len - 2:
-                    layout_tokens.append(class_id)
-
-        node_type = node.get('class', 'Unknown')
-        token_hash = (hash(node_type) % (config.json_vocab_size - 3)) + 3
-        if len(json_tokens) < config.max_json_seq_len - 2:
-            json_tokens.append(token_hash)
-
-        if 'children' in node:
+        if 'children' in node and isinstance(node['children'], list):
             for child in node['children']:
-                traverse(child)
+                _apply_binning(child)
 
-    traverse(ui_root)
+    if isinstance(json_data, dict) and 'activity' in json_data and 'root' in json_data['activity']:
+        _apply_binning(json_data['activity']['root'])
+    else:
+        _apply_binning(json_data)
 
-    layout_tokens.append(config.eos_token_id)
-    json_tokens.append(config.eos_token_id)
-
-    return layout_tokens, json_tokens
+    return json_data
 
 
-def decode_layout_tokens(token_list, config):
+def _reduce_json_nodes(json_data):
+    """
+    Strips away unimportant data, leaving only structural and semantic
+    keys necessary for UI reconstruction.
+    """
+
+    def _apply_reduce(node):
+        if not isinstance(node, dict):
+            return node
+
+        reduced_node = {}
+        keys_to_keep = ['class', 'text', 'content-desc', 'clickable', 'checked', 'bounds']
+        for k in keys_to_keep:
+            if k in node:
+                reduced_node[k] = node[k]
+
+        if 'children' in node and isinstance(node['children'], list):
+            children = []
+            for child in node['children']:
+                child_reduced = _apply_reduce(child)
+                if child_reduced is not None:
+                    children.append(child_reduced)
+            if children:
+                reduced_node['children'] = children
+
+        # Return None if the node ended up completely empty to allow proper filtering
+        return reduced_node if reduced_node else None
+
+    if isinstance(json_data, dict) and 'activity' in json_data and 'root' in json_data['activity']:
+        json_data['activity']['root'] = _apply_reduce(json_data['activity']['root'])
+    else:
+        json_data = _apply_reduce(json_data)
+
+    return json.dumps(json_data, indent=2)
+
+
+def _minify_json(json_data):
+    """
+    Removes all unnecessary whitespaces from a JSON object.
+    This creates the most compact valid JSON representation.
+    """
+    return json.dumps(json_data, separators=(',', ':'))
+
+
+# ==========================================
+# Decoding Stuff
+# ==========================================
+
+def _decode_layout_tokens(token_list, config):
     decoded_boxes = []
     tokens = token_list[1:] if token_list and token_list[0] == config.sos_token_id else token_list
     for i in range(0, len(tokens), 5):
@@ -207,7 +270,7 @@ def decode_layout_tokens(token_list, config):
     return decoded_boxes
 
 
-def decode_json_tokens(token_list, config):
+def _decode_json_tokens(token_list, config):
     tokens = token_list[1:] if token_list and token_list[0] == config.sos_token_id else token_list
     elements = []
     for t in tokens:
@@ -236,84 +299,6 @@ def load_embeddings_from_csv(filepath="../rico-data/embeddings/embeddings_qwen.c
     return df
 
 
-def minify_json(json_data):
-    """
-    Removes all unnecessary whitespaces from a JSON object.
-    This creates the most compact valid JSON representation.
-    """
-    return json.dumps(json_data, separators=(',', ':'))
-
-
-def flatten_rico_to_text(node):
-    """
-    Recursively extracts meaningful UI elements from a RICO JSON node
-    and flattens them into a clean, token-efficient text representation
-    ideal for LLM embeddings.
-    """
-    if not node:
-        return ""
-
-    elements = []
-
-    # Extract useful attributes commonly found in RICO dataset
-    # We split the class to remove the verbose 'android.widget.' prefix
-    ui_class = node.get('class', '').split('.')[-1]
-    text = node.get('text', '')
-    content_desc = node.get('content-desc', '')
-    bounds = node.get('bounds', [])
-
-    # Fix for content_desc being a list like [null] or ["string"] in RICO dataset
-    if isinstance(content_desc, list):
-        content_desc = " ".join([str(item) for item in content_desc if item is not None])
-    elif content_desc is None:
-        content_desc = ""
-
-    # Clean strings (added isinstance checks to prevent future type errors)
-    text = text.strip() if isinstance(text, str) and text else ""
-    content_desc = content_desc.strip() if isinstance(content_desc, str) and content_desc else ""
-
-    # Build a semantic string for the current node
-    parts = []
-    if ui_class:
-        parts.append(f"[{ui_class}]")
-    if text:
-        parts.append(f"Text: '{text}'")
-    elif content_desc:  # Fallback to content-desc if no text is present
-        parts.append(f"Desc: '{content_desc}'")
-
-    # Include bounding boxes if they are available
-    if bounds and isinstance(bounds, list) and len(bounds) == 4:
-        parts.append(f"Bounds: {bounds}")
-
-    # Only keep nodes that have visible semantic value or positional bounds to save tokens
-    # You can modify this condition if you want to keep structural empty layouts
-    if parts and (text or content_desc or bounds):
-        elements.append(" ".join(parts))
-
-    # Recursively process children
-    if 'children' in node and node['children']:
-        for child in node['children']:
-            child_text = flatten_rico_to_text(child)
-            if child_text:
-                elements.append(child_text)
-
-    # Join with newlines so each element is clearly separated for the embedding model
-    return "\n".join(elements)
-
-
-def process_rico_data(json_data, flatten=True):
-    """
-    Processes RICO JSON data for embeddings based on the flatten switch.
-    If flatten is False, it returns the minified JSON string.
-    If flatten is True, it returns the flattened semantic text.
-    """
-    if not flatten:
-        return minify_json(json_data)
-
-    root_node = json_data.get('activity', {}).get('root', {})
-    return flatten_rico_to_text(root_node)
-
-
 # ==========================================
 # Example Usage
 # ==========================================
@@ -322,10 +307,10 @@ if __name__ == "__main__":
     sample_rico_data = json.load(open("data/rico-examples/0.json", "r"))
 
     print("--- Testing with flatten=False (Only Minify) ---")
-    result_minified = process_rico_data(sample_rico_data, flatten=False)
+    result_minified = process_rico_json(sample_rico_data, flatten=False)
     print(result_minified)
     print("\n")
 
     print("--- Testing with flatten=True (Flatten & Filter) ---")
-    result_flattened = process_rico_data(sample_rico_data, flatten=True)
+    result_flattened = process_rico_json(sample_rico_data, flatten=True)
     print(result_flattened)
