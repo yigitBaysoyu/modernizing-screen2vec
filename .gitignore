@@ -4,3 +4,4 @@
 .idea/
 *.pth
 __pycache__/*
+*.pyc
