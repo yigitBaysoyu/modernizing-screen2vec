@@ -16,8 +16,7 @@ import pandas as pd
 import argparse
 import difflib
 
-from utils import (Config, LayoutDecoder, StructuralDecoder, parse_rico_json,
-                   decode_layout_tokens, decode_json_tokens, CUDA_VISIBLE_DEVICE)
+from utils import (Config, LayoutDecoder, StructuralDecoder, process_json_file, CUDA_VISIBLE_DEVICE)
 
 os.environ["CUDA_VISIBLE_DEVICES"] = CUDA_VISIBLE_DEVICE
 

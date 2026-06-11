@@ -137,7 +137,7 @@ def train():
     print("Loaded optimizer.")
 
     # Load dataset - ensure directories are structured correctly
-    dataset = UIDataset("../rico-data/embeddings/embeddings_qwen.csv", tokenizer=model.tokenizer)
+    dataset = UIDataset("../../rico-data/embeddings/embeddings_qwen.csv", tokenizer=model.tokenizer)
     dataloader = DataLoader(dataset, batch_size=4, collate_fn=collate_fn, shuffle=True)
 
     print("Loaded dataset of size", len(dataset))
