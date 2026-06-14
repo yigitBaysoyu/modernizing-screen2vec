@@ -112,135 +112,248 @@ class StructuralDecoder(nn.Module):
 
 
 # =============================================================================
+# Rico cleaning  (cleaning mechanism ported from cleaning/clean_rico.py)
+# -----------------------------------------------------------------------------
+# Produces a screen object  {app, activity, components}.  `app` and `activity`
+# come from Rico's top-level activity_name and capture the screen's function /
+# identity; `components` keeps the *visible* parts of the hierarchy and drops
+# invisible layout scaffolding.
+#
+# Per-node keep-set (everything else is dropped):
+#     - class         : full Android class path (e.g. android.widget.Button)
+#     - text          : verbatim, when non-empty
+#     - content-desc  : accessibility label, only when a real (non-null) string
+#     - resource-id   : developer id (e.g. "action_share"), generic ids dropped
+#     - clickable     : emitted only when True (presence == clickable)
+#     - bounds        : binned to 1-100 against the device frame (root bounds)
+#     - children      : nested visible components (grouping preserved)
+# =============================================================================
+
+# Containers that actually draw something on screen -> kept as grouping nodes.
+VISIBLE_CONTAINER_SUFFIXES = (
+    "CardView", "Toolbar", "ToolBar", "ActionBar", "TitleBar",
+    "ListView", "RecyclerView", "GridView", "ExpandableListView", "ListPopupWindow",
+)
+# Inert wrappers that draw nothing -> unwrapped (children lifted up).
+SCAFFOLD_EXACT = {
+    "View", "ViewGroup", "ScrollView", "HorizontalScrollView", "NestedScrollView",
+    "ViewPager", "ViewPager2", "ActionMenuView", "ActionBarContainer", "ActionBarContextView",
+}
+# Generic framework / system resource-ids that carry no app-specific meaning.
+SYSTEM_IDS = {
+    "content", "navigationBarBackground", "statusBarBackground", "action_mode_bar_stub",
+    "decor_content_parent", "action_bar_container", "action_bar", "action_bar_root",
+    "parentPanel", "contentPanel", "topPanel", "customPanel", "buttonPanel", "custom",
+}
+
+
+# -----------------------------------------------------------------------------
+# Class-based role detection
+# -----------------------------------------------------------------------------
+def short_name(node):
+    # last segment of the class path: "android.widget.Button" -> "Button"
+    cls = node.get("class") or ""
+    return cls.split(".")[-1]
+
+
+def is_visible_container(node):
+    # a container that actually draws (Card/Toolbar/List/Grid) -> keep, never unwrap
+    s = short_name(node)
+    return any(s.endswith(suf) for suf in VISIBLE_CONTAINER_SUFFIXES)
+
+
+def is_scaffold(node):
+    # an inert wrapper that draws nothing -> should be unwrapped (children lifted)
+    s = short_name(node)
+    if is_visible_container(node):
+        return False                 # visible containers are never scaffolding
+    if "DecorView" in s:
+        return True                  # the top-level window wrapper
+    if s.endswith("Layout"):
+        return True                  # any *Layout is a grouping container
+    return s in SCAFFOLD_EXACT        # other known inert wrappers
+
+
+def is_bare_view(node):
+    # a plain View/ViewGroup, typically a divider / spacer / system-bar strip
+    return short_name(node) in ("View", "ViewGroup")
+
+
+# -----------------------------------------------------------------------------
+# Node-level predicates & value extractors
+# -----------------------------------------------------------------------------
+def is_visible(node):
+    """True if the node is shown to the user. Handles both Rico key spellings."""
+    v = node.get("visible-to-user", node.get("visible_to_user"))
+    if v is None:
+        return node.get("visibility") == "visible"
+    return bool(v)
+
+
+def area_ok(bounds):
+    """True if bounds is a valid [x1,y1,x2,y2] box with positive area."""
+    return (
+        isinstance(bounds, list)
+        and len(bounds) == 4
+        and (bounds[2] - bounds[0]) > 0
+        and (bounds[3] - bounds[1]) > 0
+    )
+
+
+def bin_bounds(bounds, width, height):
+    """Rescale absolute pixel bounds to 1-100 against the device frame."""
+    out = []
+    for i, val in enumerate(bounds):
+        # even index = x (scale by width), odd index = y (scale by height)
+        denom = (width if i % 2 == 0 else height) or 1
+        out.append(max(1, min(100, round(val / denom * 100))))
+    return out
+
+
+def text_of(node):
+    t = node.get("text")
+    if t and str(t).strip():
+        return str(t).strip()
+    return None
+
+
+def content_desc_of(node):
+    """Flatten Rico's content-desc list to the first real label, or None."""
+    cd = node.get("content-desc")
+    if isinstance(cd, list):
+        cd = next((x for x in cd if x and str(x).strip()), None)
+    if cd and str(cd).strip():
+        return str(cd).strip()
+    return None
+
+
+def resource_id_of(node):
+    """Short developer id (after 'id/'), dropping generic framework/system ids."""
+    short = (node.get("resource-id") or "").split("/")[-1]
+    if short and short not in SYSTEM_IDS:
+        return short
+    return None
+
+
+# -----------------------------------------------------------------------------
+# Core cleaning  (returns a LIST of components per node, to allow unwrapping)
+# -----------------------------------------------------------------------------
+def clean_node(node, width, height):
+    """Clean a raw Rico node. Returns a list of cleaned components (0, 1, or many)."""
+    # PRUNE: invisible or zero-area nodes (and their whole subtree) are skipped
+    if not isinstance(node, dict) or not is_visible(node):
+        return []
+    bounds = node.get("bounds")
+    if not area_ok(bounds):
+        return []
+
+    # recurse first: children come back already cleaned/unwrapped/flattened
+    kids = []
+    for c in node.get("children") or []:
+        kids.extend(clean_node(c, width, height))
+
+    clickable = node.get("clickable") is True
+
+    # UNWRAP: inert scaffolding draws nothing -> drop self, lift its children up
+    if is_scaffold(node) and not clickable:
+        return kids
+
+    # DROP: a bare View with no text/desc/children/clickability is just a strip
+    if is_bare_view(node) and not clickable and not text_of(node) and not content_desc_of(node) and not kids:
+        return []
+
+    # KEEP: build the component with keep-set fields only, in a stable order
+    out = {}
+    cls = node.get("class")
+    if cls:
+        out["class"] = cls
+    text = text_of(node)
+    if text:
+        out["text"] = text
+    desc = content_desc_of(node)
+    if desc:
+        out["content-desc"] = desc
+    rid = resource_id_of(node)
+    if rid:
+        out["resource-id"] = rid
+    if clickable:
+        out["clickable"] = True
+    out["bounds"] = bin_bounds(bounds, width, height)
+    if kids:
+        out["children"] = kids
+    return [out]
+
+
+def device_frame(root):
+    """Device width/height from root bounds; fall back to max observed bounds."""
+    b = root.get("bounds")
+    if area_ok(b):
+        return b[2], b[3]
+    max_x = max_y = 1
+
+    def scan(n):
+        nonlocal max_x, max_y
+        if not isinstance(n, dict):
+            return
+        bb = n.get("bounds")
+        if isinstance(bb, list) and len(bb) == 4:
+            max_x = max(max_x, int(bb[2]))
+            max_y = max(max_y, int(bb[3]))
+        for c in n.get("children") or []:
+            scan(c)
+
+    scan(root)
+    return max_x, max_y
+
+
+def parse_activity_name(raw):
+    """Split Rico's top-level 'activity_name' into (app package, short activity class).
+
+    e.g. "se.perigee.android.seven/com.perigee.seven.ui.activity.WorkoutSessionCompleteActivity"
+         -> ("se.perigee.android.seven", "WorkoutSessionCompleteActivity")
+    """
+    name = raw.get("activity_name") or ""
+    if "/" in name:
+        pkg, activity = name.split("/", 1)
+    else:
+        pkg, activity = "", name
+    return pkg, activity.split(".")[-1]
+
+
+def clean_screen(json_path):
+    """Load a raw Rico JSON file and return the cleaned screen object.
+
+    {app, activity, components} -- app/activity carry the screen's function;
+    components is the list of visible UI components.
+    """
+    with open(json_path, "r", encoding="utf-8") as f:
+        raw = json.load(f)
+    app, activity = parse_activity_name(raw)          # screen function / identity
+    root = raw.get("activity", {}).get("root")
+    # clean the view tree against the device frame -> flat-ish forest of components
+    components = clean_node(root, *device_frame(root)) if root else []
+    return {"app": app, "activity": activity, "components": components}
+
+
+# =============================================================================
 # Shared Functions & Parsers
 # =============================================================================
-def process_json_file(json_path,
-                      binning=True,
-                      reduce=True,
-                      minify=True):
+def process_json_file(json_path, minify=True):
     """
-    Processes RICO JSON data for embeddings based on the flatten switch.
-    If flatten is False, it returns the minified JSON string.
-    If flatten is True, it returns the flattened semantic text.
+    Clean a raw Rico JSON file into the compact screen representation used by
+    the pipeline. Returns a JSON string of {app, activity, components}.
+
+    Purely in-memory: reads the input read-only and returns a string; it does
+    not write any cleaned files to disk.
+
+        minify=True  -> compact, whitespace-free JSON (default, for embeddings)
+        minify=False -> pretty-printed JSON (for inspection)
     """
     assert os.path.exists(json_path), f"Could not find path: {json_path}"
-
-    with open(json_path, 'r') as f:
-        json_data = json.load(f)
-
-    # all of this operates on a dict
-    if binning:
-        json_data = _bin_json_coordinates(json_data)
-    if reduce:
-        json_data = _reduce_json_nodes(json_data)
+    screen = clean_screen(json_path)
     if minify:
-        return _minify_json(json_data)
-    else:
-        return json.dumps(json_data, indent=2)
-
-
-def _bin_json_coordinates(json_data):
-    """
-    Replaces absolute pixel coordinates with binned percentages (1-100)
-    based on the maximum dimensions found in the JSON data.
-    """
-    root_node = json_data.get('activity', {}).get('root', {}) if isinstance(json_data, dict) else json_data
-
-    max_x = 1
-    max_y = 1
-
-    def _find_max_bounds(node):
-        nonlocal max_x, max_y
-        if not isinstance(node, dict):
-            return
-        if 'bounds' in node:
-            b = node['bounds']
-            if isinstance(b, list) and len(b) == 4:
-                try:
-                    x2 = int(b[2])
-                    y2 = int(b[3])
-                    if x2 > max_x: max_x = x2
-                    if y2 > max_y: max_y = y2
-                except (ValueError, TypeError):
-                    pass
-
-        if 'children' in node and isinstance(node['children'], list):
-            for child in node['children']:
-                _find_max_bounds(child)
-
-    _find_max_bounds(root_node)
-
-    screen_width = max_x
-    screen_height = max_y
-
-    def _apply_binning(node):
-        if not isinstance(node, dict):
-            return
-        if 'bounds' in node:
-            b = node['bounds']
-            if isinstance(b, list) and len(b) == 4:
-                reduced_bounds = []
-                for idx, val in enumerate(b):
-                    try:
-                        val_num = int(val)
-                    except (ValueError, TypeError):
-                        val_num = 0
-
-                    denom = screen_width if idx % 2 == 0 else screen_height
-                    if denom <= 0:
-                        denom = 1
-
-                    pct = round((val_num / denom) * 100)
-                    pct_clamped = max(1, min(100, pct))
-                    reduced_bounds.append(pct_clamped)
-                node['bounds'] = reduced_bounds
-
-        if 'children' in node and isinstance(node['children'], list):
-            for child in node['children']:
-                _apply_binning(child)
-
-    if isinstance(json_data, dict) and 'activity' in json_data and 'root' in json_data['activity']:
-        _apply_binning(json_data['activity']['root'])
-    else:
-        _apply_binning(json_data)
-
-    return json_data
-
-
-def _reduce_json_nodes(json_data):
-    """
-    Strips away unimportant data, leaving only structural and semantic
-    keys necessary for UI reconstruction.
-    """
-
-    def _apply_reduce(node):
-        if not isinstance(node, dict):
-            return node
-
-        reduced_node = {}
-        keys_to_keep = ['class', 'text', 'content-desc', 'clickable', 'checked', 'bounds']
-        for k in keys_to_keep:
-            if k in node:
-                reduced_node[k] = node[k]
-
-        if 'children' in node and isinstance(node['children'], list):
-            children = []
-            for child in node['children']:
-                child_reduced = _apply_reduce(child)
-                if child_reduced is not None:
-                    children.append(child_reduced)
-            if children:
-                reduced_node['children'] = children
-
-        # Return None if the node ended up completely empty to allow proper filtering
-        return reduced_node if reduced_node else None
-
-    if isinstance(json_data, dict) and 'activity' in json_data and 'root' in json_data['activity']:
-        json_data['activity']['root'] = _apply_reduce(json_data['activity']['root'])
-    else:
-        json_data = _apply_reduce(json_data)
-
-    return json.dumps(json_data, indent=2)
+        return _minify_json(screen)
+    return json.dumps(screen, indent=2)
 
 
 def _minify_json(json_data):
@@ -303,14 +416,9 @@ def load_embeddings_from_csv(filepath="../rico-data/embeddings/embeddings_qwen.c
 # Example Usage
 # ==========================================
 if __name__ == "__main__":
-    # Mocking a small chunk of RICO UI data for demonstration
-    sample_rico_data = json.load(open("data/rico-examples/0.json", "r"))
+    # Quick demo: clean one example screen and print the result.
+    print("--- Minified ---")
+    print(process_json_file("data/rico-examples/0.json", minify=True))
 
-    print("--- Testing with flatten=False (Only Minify) ---")
-    result_minified = process_rico_json(sample_rico_data, flatten=False)
-    print(result_minified)
-    print("\n")
-
-    print("--- Testing with flatten=True (Flatten & Filter) ---")
-    result_flattened = process_rico_json(sample_rico_data, flatten=True)
-    print(result_flattened)
+    print("\n--- Pretty ---")
+    print(process_json_file("data/rico-examples/0.json", minify=False))
