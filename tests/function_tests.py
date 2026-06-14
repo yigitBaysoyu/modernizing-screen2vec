@@ -7,6 +7,8 @@ from utils import process_json_file, clean_screen
 class TestUtils(unittest.TestCase):
     def test_process_json_file_minified(self):
         result = process_json_file('data/rico-examples/2.json', minify=True)
+        print(result)
+
     def test_loading_json_binning(self):
         # Testing with different parameters (binning/reduce/minify)
         result = process_json_file('data/rico-examples/2.json',
@@ -19,6 +21,8 @@ class TestUtils(unittest.TestCase):
 
     def test_process_json_file_pretty(self):
         result = process_json_file('data/rico-examples/2.json', minify=False)
+        print(result)
+
     def test_loading_json_reduce(self):
         # Testing with different parameters (binning/reduce/minify)
         result = process_json_file('data/rico-examples/2.json',
