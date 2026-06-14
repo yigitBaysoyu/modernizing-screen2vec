@@ -8,7 +8,7 @@ import csv
 import socket
 import time
 
-from utils import _minify_json
+from utils import _minify_json, process_json_file
 
 try:
     import fcntl
@@ -24,6 +24,9 @@ from tqdm import tqdm
 
 if socket.gethostname().lower() == "hci-nc":
     os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+elif socket.gethostname().lower() == "midas":
+    os.environ["CUDA_VISIBLE_DEVICES"] = "3"
+
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
 
@@ -73,7 +76,7 @@ def main(json_path, image_path, model, processor):
                 {
                     "type": "text",
                     #"text": f"Represent this UI component and its context: {json_content}",
-                    "text": f"{_minify_json(json_content)}",
+                    "text": f"{process_json_file(json_content)}",
                 },
             ],
         }
