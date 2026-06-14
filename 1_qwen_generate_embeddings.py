@@ -21,7 +21,6 @@ from qwen_vl_utils import process_vision_info
 from glob import glob
 from tqdm import tqdm
 
-
 if socket.gethostname().lower() == "hci-nc":
     os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 elif socket.gethostname().lower() == "midas":
@@ -53,10 +52,10 @@ def main(json_path, image_path, model, processor):
     if not os.path.exists(json_path):
         print(f"Error: JSON file not found at {json_path}")
         return None
-        
+
     with open(json_path, 'r', encoding='utf-8') as f:
         json_content = f.read()
-    
+
     # 2. Check for Image
     if not os.path.exists(image_path):
         print(f"Error: Image not found at {image_path}")
@@ -71,12 +70,12 @@ def main(json_path, image_path, model, processor):
                 {
                     "type": "image",
                     "image": f"file://{image_path}",
-                    #"max_pixels": 1000000, # Uncomment if you still get OOMs due to extremely tall screenshots
+                    # "max_pixels": 1000000, # Uncomment if you still get OOMs due to extremely tall screenshots
                 },
                 {
                     "type": "text",
-                    #"text": f"Represent this UI component and its context: {json_content}",
-                    "text": f"{process_json_file(json_content)}",
+                    # "text": f"Represent this UI component and its context: {json_content}",
+                    "text": f"{process_json_file(json_path)}",
                 },
             ],
         }
@@ -87,7 +86,7 @@ def main(json_path, image_path, model, processor):
         messages, tokenize=False, add_generation_prompt=True
     )
     image_inputs, video_inputs = process_vision_info(messages)
-    
+
     inputs = processor(
         text=[text],
         images=image_inputs,
@@ -102,7 +101,7 @@ def main(json_path, image_path, model, processor):
         outputs = model(**inputs, output_hidden_states=True)
         # Extract the hidden states from the last layer for all tokens
         last_hidden_states = outputs.hidden_states[-1]
-        
+
         # Simple mean pooling over the sequence dimension to generate a single vector
         # Note: The official Qwen3-VL-Embedding might have specific EOS token pooling instructions,
         # but mean pooling is a solid fallback for multimodal representation.
@@ -130,14 +129,14 @@ if __name__ == "__main__":
         to_glob = glob("rico/examples/*.json")
         to_glob = glob("../rico-data/data/combined/*json", recursive=True)
         to_glob = sorted(to_glob)
-    
+
     print("Loaded files (showing first 10):", to_glob[:10])
     assert len(to_glob) > 1
 
     print("Loading model and processor... (This may take a while and requires ~16GB of VRAM/RAM for 8B)")
-    
+
     model_id = "../rico-data/models/Qwen3-VL-Embedding-8B"
-    #model_id = "./models/Qwen3-VL-Embedding-8B"
+    # model_id = "./models/Qwen3-VL-Embedding-8B"
 
     if not os.path.exists(model_id):
         print(f"\nLocal model not found at {model_id}")
@@ -154,8 +153,8 @@ if __name__ == "__main__":
         # Load the model with automatic device mapping (requires accelerate)
         # Using bfloat16 to avoid Out-Of-Memory errors on 16GB GPUs
         model = AutoModel.from_pretrained(
-            model_id, 
-            torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32, 
+            model_id,
+            dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
             device_map="auto"
         )
         processor = AutoProcessor.from_pretrained(model_id)
@@ -172,7 +171,7 @@ if __name__ == "__main__":
     for i, g in enumerate(pbar):
         if i % step_size == 0:
             pbar.set_description(f"Processing: {g}")
-            
+
         json_path = g
         image_path = g.replace(".json", ".jpg")
 
@@ -181,7 +180,7 @@ if __name__ == "__main__":
         except torch.OutOfMemoryError as oom:
             print("Skipping", json_path, "due to torch.OutOfMemoryError:", str(oom))
             continue
-        
+
         if embedding is not None:
             append_to_csv_safely(csv_output_file, g, embedding)
             successful_embeddings_count += 1
@@ -190,7 +189,7 @@ if __name__ == "__main__":
     elapsed_seconds = int(end_time - start_time)
     hours, remainder = divmod(elapsed_seconds, 3600)
     minutes, seconds = divmod(remainder, 60)
-    
+
     print(f"\n--- Execution Summary ---")
     print(f"Total time elapsed: {hours} hours, {minutes} minutes, {seconds} seconds")
     print(f"Total embeddings performed: {successful_embeddings_count}")

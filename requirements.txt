@@ -11,3 +11,4 @@ tqdm
 pandas
 orjson
 matplotlib
+accelerate
