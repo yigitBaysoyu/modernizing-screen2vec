@@ -10,7 +10,7 @@ from tqdm import tqdm
 from datetime import datetime
 
 from utils import (Config, LayoutDecoder, StructuralDecoder, load_embeddings_from_csv, CUDA_VISIBLE_DEVICE,
-                   parse_rico_json, _decode_json_tokens, _decode_layout_tokens)
+                   process_json_file, _decode_json_tokens, _decode_layout_tokens)
 
 os.environ["CUDA_VISIBLE_DEVICES"] = CUDA_VISIBLE_DEVICE
 
@@ -71,7 +71,7 @@ def main():
         for i, row in tqdm(train_embeddings.iterrows(), total=len(train_embeddings),
                            desc=f"Epoch {epoch + 1}/{num_epochs} | Train Layout Loss: {avg_layout_loss:.6f} | Train Structure Loss: {avg_struct_loss:.6f}"):
 
-            tgt_layout, tgt_json = process_json_string(row["json-path"], cfg)
+            tgt_layout, tgt_json = process_json_file(row["json-path"], cfg)
             if tgt_layout is None or tgt_json is None or len(tgt_layout) <= 1 or len(tgt_json) <= 1:
                 continue
 
@@ -116,7 +116,7 @@ def main():
 
         with torch.no_grad():
             for i, row in tqdm(val_embeddings.iterrows(), total=len(val_embeddings), desc="Validating", leave=False):
-                tgt_layout, tgt_json = process_json_string(row["json-path"], cfg)
+                tgt_layout, tgt_json = process_json_file(row["json-path"], cfg)
                 if tgt_layout is None or tgt_json is None or len(tgt_layout) <= 1 or len(tgt_json) <= 1:
                     continue
 
