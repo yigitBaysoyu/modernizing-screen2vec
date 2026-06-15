@@ -356,6 +356,28 @@ def process_json_file(json_path, minify=True):
     return json.dumps(screen, indent=2)
 
 
+def process_json_string(json_string, minify=True):
+    """
+    Clean a raw Rico JSON string into the compact screen representation used by
+    the pipeline. Returns a JSON string of {app, activity, components}.
+
+    Purely in-memory: reads the input read-only and returns a string; it does
+    not write any cleaned files to disk.
+
+        minify=True  -> compact, whitespace-free JSON (default, for embeddings)
+        minify=False -> pretty-printed JSON (for inspection)
+    """
+    raw = json.loads(json_string)
+    app, activity = parse_activity_name(raw)
+    root = raw.get("activity", {}).get("root")
+    components = clean_node(root, *device_frame(root)) if root else []
+    screen = {"app": app, "activity": activity, "components": components}
+
+    if minify:
+        return _minify_json(screen)
+    return json.dumps(screen, indent=2)
+
+
 def _minify_json(json_data):
     """
     Removes all unnecessary whitespaces from a JSON object.

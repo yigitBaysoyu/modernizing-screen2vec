@@ -2,17 +2,15 @@
 
 import os
 import json
-import orjson
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import pandas as pd
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 from datetime import datetime
 
-from utils import (Config, LayoutDecoder, StructuralDecoder, parse_rico_json,
-                   decode_layout_tokens, decode_json_tokens, load_embeddings_from_csv, CUDA_VISIBLE_DEVICE)
+from utils import (Config, LayoutDecoder, StructuralDecoder, load_embeddings_from_csv, CUDA_VISIBLE_DEVICE,
+                   process_json_string, _decode_json_tokens, _decode_layout_tokens)
 
 os.environ["CUDA_VISIBLE_DEVICES"] = CUDA_VISIBLE_DEVICE
 
@@ -30,7 +28,7 @@ def main():
     print(f"Using device: {device}")
 
     try:
-        all_embeddings = load_embeddings_from_csv("../rico-data/embeddings/embeddings_qwen.csv")
+        all_embeddings = load_embeddings_from_csv("embeddings.csv")
     except Exception as e:
         print(f"Critical error: {e}")
         return
@@ -73,7 +71,7 @@ def main():
         for i, row in tqdm(train_embeddings.iterrows(), total=len(train_embeddings),
                            desc=f"Epoch {epoch + 1}/{num_epochs} | Train Layout Loss: {avg_layout_loss:.6f} | Train Structure Loss: {avg_struct_loss:.6f}"):
 
-            tgt_layout, tgt_json = parse_rico_json(row["json-path"], cfg)
+            tgt_layout, tgt_json = process_json_string(row["json-path"], cfg)
             if tgt_layout is None or tgt_json is None or len(tgt_layout) <= 1 or len(tgt_json) <= 1:
                 continue
 
@@ -118,7 +116,7 @@ def main():
 
         with torch.no_grad():
             for i, row in tqdm(val_embeddings.iterrows(), total=len(val_embeddings), desc="Validating", leave=False):
-                tgt_layout, tgt_json = parse_rico_json(row["json-path"], cfg)
+                tgt_layout, tgt_json = process_json_string(row["json-path"], cfg)
                 if tgt_layout is None or tgt_json is None or len(tgt_layout) <= 1 or len(tgt_json) <= 1:
                     continue
 
@@ -233,11 +231,11 @@ def main():
         json_tokens_list = gen_json[0].tolist()
 
         print("\nDecoded Layout:")
-        decoded_layout = decode_layout_tokens(layout_tokens_list, cfg)
+        decoded_layout = _decode_layout_tokens(layout_tokens_list, cfg)
         print(json.dumps(decoded_layout, indent=2))
 
         print("\nDecoded JSON:")
-        decoded_json = decode_json_tokens(json_tokens_list, cfg)
+        decoded_json = _decode_json_tokens(json_tokens_list, cfg)
         print(decoded_json)
 
 
