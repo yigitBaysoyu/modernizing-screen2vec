@@ -12,3 +12,4 @@ pandas
 orjson
 matplotlib
 peft
+accelerate
