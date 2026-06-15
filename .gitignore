@@ -8,3 +8,5 @@ __pycache__/*
 /__pycache__
 *.jpg
 .DS_Store
+embeddings.csv
+*.png

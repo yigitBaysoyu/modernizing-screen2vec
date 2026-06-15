@@ -10,7 +10,7 @@ from tqdm import tqdm
 from datetime import datetime
 
 from utils import (Config, LayoutDecoder, StructuralDecoder, load_embeddings_from_csv, CUDA_VISIBLE_DEVICE,
-                   process_json_string, _decode_json_tokens, _decode_layout_tokens)
+                   parse_rico_json, _decode_json_tokens, _decode_layout_tokens)
 
 os.environ["CUDA_VISIBLE_DEVICES"] = CUDA_VISIBLE_DEVICE
 
@@ -175,8 +175,8 @@ def main():
         structural_decoder.load_state_dict(best_struct_state)
         print("Restored best model weights from memory.")
 
-    layout_save_path = f"layout_decoder_best_{timestamp}.pth"
-    struct_save_path = f"structural_decoder_best_{timestamp}.pth"
+    layout_save_path = f"adapter_model_out/layout_decoder_best_{timestamp}.pth"
+    struct_save_path = f"adapter_model_out/structural_decoder_best_{timestamp}.pth"
 
     torch.save(layout_decoder.state_dict(), layout_save_path)
     torch.save(structural_decoder.state_dict(), struct_save_path)
@@ -204,7 +204,7 @@ def main():
     plt.legend()
 
     plt.tight_layout()
-    plot_filename = f"training_history_{timestamp}.png"
+    plot_filename = f"adapter_training_history/training_history_{timestamp}.png"
     plt.savefig(plot_filename)
     print(f"Saved training history plot to '{plot_filename}'")
 
