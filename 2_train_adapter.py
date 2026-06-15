@@ -1,4 +1,13 @@
-# Trains the adapter to adapt embedding space to reconstruction space.
+# Trains the LLaVA-style adapter to map Qwen3-VL embedding space to
+# cleaned JSON via a LoRA-finetuned small language model.
+#
+# Architecture:
+#   Pre-computed Qwen3-VL embedding (4096-dim)
+#     -> EmbeddingProjector (MLP): maps to num_prefix_tokens x lm_hidden_dim
+#     -> Concatenated as prefix to target JSON token embeddings
+#     -> Qwen2.5-0.5B (LoRA fine-tuned) learns to generate cleaned JSON
+#
+# Target: minified cleaned JSON string from process_json_file()
 
 import os
 import json
@@ -8,235 +17,487 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 from datetime import datetime
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from peft import get_peft_model, LoraConfig, TaskType
 
-from utils import (Config, LayoutDecoder, StructuralDecoder, load_embeddings_from_csv, CUDA_VISIBLE_DEVICE,
-                   process_json_file, _decode_json_tokens, _decode_layout_tokens)
+from utils import load_embeddings_from_csv, process_json_file, CUDA_VISIBLE_DEVICE
 
 os.environ["CUDA_VISIBLE_DEVICES"] = CUDA_VISIBLE_DEVICE
 
+
 # =============================================================================
-# Configuration Initialization
+# Configuration
 # =============================================================================
-cfg = Config()
+class AdapterConfig:
+    """Configuration for the LLaVA-style adapter training."""
+
+    # Qwen3-VL embedding dimension (from step 1_qwen_generate_embeddings.py)
+    qwen_embed_dim = 4096
+
+    # Projector: maps Qwen embedding -> virtual prefix tokens for the LM
+    num_prefix_tokens = 8
+
+    # Small LM for generation (auto-downloaded from HuggingFace on first run)
+    lm_model_id = "Qwen/Qwen2.5-0.5B"
+
+    # LoRA fine-tuning parameters
+    lora_r = 16
+    lora_alpha = 32
+    lora_dropout = 0.05
+    lora_target_modules = ["q_proj", "v_proj", "k_proj", "o_proj"]
+
+    # Training hyperparameters
+    lr_projector = 1e-4       # Learning rate for the MLP projector
+    lr_lora = 2e-5            # Learning rate for LoRA parameters
+    num_epochs = 20
+    patience = 3              # Early stopping patience
+    max_target_len = 1024     # Max tokens for the target JSON string
+    grad_accum_steps = 4      # Gradient accumulation steps
 
 
 # =============================================================================
-# Main Pipeline execution logic
+# Embedding Projector (The LLaVA-style MLP adapter)
+# =============================================================================
+class EmbeddingProjector(nn.Module):
+    """
+    Projects a single Qwen3-VL embedding vector into a sequence of
+    virtual prefix tokens in the language model's embedding space.
+
+    This is the core "adapter" component, analogous to LLaVA's visual
+    projection layer.  It translates the embedding model's representation
+    into a conditioning signal that the language model can attend to.
+
+    Example:
+        projector = EmbeddingProjector(qwen_dim=4096, lm_hidden_dim=896, num_prefix_tokens=8)
+
+        qwen_embedding = torch.randn(1, 4096)        # one pre-computed Qwen3-VL embedding
+        prefix = projector(qwen_embedding)            # -> [1, 8, 896]
+        # These 8 virtual tokens are prepended to the LM's input sequence.
+        # The LM then generates the cleaned JSON conditioned on them.
+
+    Input:  [B, 4096]  (Qwen3-VL embedding)
+    Output: [B, num_prefix_tokens, lm_hidden_dim]  (prefix for the LM)
+    """
+
+    def __init__(self, qwen_dim, lm_hidden_dim, num_prefix_tokens):
+        super().__init__()
+        self.num_prefix_tokens = num_prefix_tokens
+        self.lm_hidden_dim = lm_hidden_dim
+
+        out_dim = num_prefix_tokens * lm_hidden_dim
+        self.projector = nn.Sequential(
+            nn.Linear(qwen_dim, out_dim),
+            nn.GELU(),
+            nn.Linear(out_dim, out_dim),
+        )
+
+    def forward(self, qwen_embedding):
+        """
+        Args:
+            qwen_embedding: [B, qwen_dim] pre-computed Qwen3-VL embeddings.
+        Returns:
+            [B, num_prefix_tokens, lm_hidden_dim] virtual prefix token embeddings.
+        """
+        projected = self.projector(qwen_embedding)
+        return projected.view(-1, self.num_prefix_tokens, self.lm_hidden_dim)
+
+
+# =============================================================================
+# Autoregressive Generation with KV-Cache
+# =============================================================================
+def generate_from_prefix(model, tokenizer, prefix_embeds, max_new_tokens=512):
+    """
+    Autoregressively generate tokens conditioned on prefix embeddings.
+    Uses KV-caching for efficient O(n) generation.
+
+    Args:
+        model:          The (LoRA-wrapped) causal LM.
+        tokenizer:      The LM's tokenizer (for EOS detection).
+        prefix_embeds:  [B, num_prefix, hidden_dim] projected prefix embeddings.
+        max_new_tokens: Maximum number of tokens to generate.
+
+    Returns:
+        generated_ids: [B, generated_len] tensor of generated token IDs.
+    """
+    device = prefix_embeds.device
+
+    # First forward pass: process all prefix embeddings, populate KV cache
+    outputs = model(inputs_embeds=prefix_embeds, use_cache=True)
+    past_key_values = outputs.past_key_values
+    next_token_logits = outputs.logits[:, -1, :]
+    next_token = torch.argmax(next_token_logits, dim=-1, keepdim=True)
+
+    generated = [next_token]
+
+    # Subsequent passes: single token at a time with cached KV
+    for _ in range(max_new_tokens - 1):
+        if (next_token == tokenizer.eos_token_id).all():
+            break
+
+        outputs = model(
+            input_ids=next_token,
+            past_key_values=past_key_values,
+            use_cache=True,
+        )
+        past_key_values = outputs.past_key_values
+        next_token_logits = outputs.logits[:, -1, :]
+        next_token = torch.argmax(next_token_logits, dim=-1, keepdim=True)
+        generated.append(next_token)
+
+    return torch.cat(generated, dim=1)
+
+
+# =============================================================================
+# Main Training Pipeline
 # =============================================================================
 def main():
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    cfg = AdapterConfig()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
+    # -------------------------------------------------------------------------
+    # 1. Load pre-computed embeddings
+    # -------------------------------------------------------------------------
     try:
         all_embeddings = load_embeddings_from_csv("embeddings.csv")
     except Exception as e:
         print(f"Critical error: {e}")
         return
 
-    # Split dataset: 80% train, 20% validation
     train_size = int(len(all_embeddings) * 0.8)
     train_embeddings = all_embeddings.iloc[:train_size]
     val_embeddings = all_embeddings.iloc[train_size:]
-    print(f"Using {len(train_embeddings)} samples for training and {len(val_embeddings)} for validation.")
+    print(
+        f"Using {len(train_embeddings)} samples for training "
+        f"and {len(val_embeddings)} for validation."
+    )
 
-    layout_decoder = LayoutDecoder(cfg).to(device)
-    structural_decoder = StructuralDecoder(cfg).to(device)
+    # -------------------------------------------------------------------------
+    # 2. Load small LM + tokenizer
+    # -------------------------------------------------------------------------
+    print(f"Loading language model: {cfg.lm_model_id} ...")
+    tokenizer = AutoTokenizer.from_pretrained(cfg.lm_model_id)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
 
-    opt_layout = torch.optim.Adam(layout_decoder.parameters(), lr=1e-4)
-    opt_struct = torch.optim.Adam(structural_decoder.parameters(), lr=1e-4)
-    criterion = nn.CrossEntropyLoss(ignore_index=cfg.pad_token_id)
+    lm_model = AutoModelForCausalLM.from_pretrained(
+        cfg.lm_model_id,
+        torch_dtype=torch.float32,
+    )
 
-    # Tracking History & Early Stopping
-    history = {'train_layout': [], 'train_struct': [], 'val_layout': [], 'val_struct': []}
-    best_val_loss = float('inf')
-    patience = 3
+    # -------------------------------------------------------------------------
+    # 3. Apply LoRA
+    # -------------------------------------------------------------------------
+    lora_config = LoraConfig(
+        task_type=TaskType.CAUSAL_LM,
+        r=cfg.lora_r,
+        lora_alpha=cfg.lora_alpha,
+        lora_dropout=cfg.lora_dropout,
+        target_modules=cfg.lora_target_modules,
+    )
+    lm_model = get_peft_model(lm_model, lora_config)
+    lm_model.to(device)
+    lm_model.print_trainable_parameters()
+
+    # -------------------------------------------------------------------------
+    # 4. Create projector
+    # -------------------------------------------------------------------------
+    lm_hidden_dim = lm_model.config.hidden_size
+    projector = EmbeddingProjector(
+        cfg.qwen_embed_dim, lm_hidden_dim, cfg.num_prefix_tokens
+    ).to(device)
+
+    proj_params = sum(p.numel() for p in projector.parameters())
+    print(f"Projector parameters: {proj_params:,}")
+
+    # -------------------------------------------------------------------------
+    # 5. Optimizer with separate learning rates
+    # -------------------------------------------------------------------------
+    optimizer = torch.optim.AdamW([
+        {"params": projector.parameters(), "lr": cfg.lr_projector},
+        {
+            "params": [p for p in lm_model.parameters() if p.requires_grad],
+            "lr": cfg.lr_lora,
+        },
+    ])
+
+    # -------------------------------------------------------------------------
+    # 6. Training loop
+    # -------------------------------------------------------------------------
+    history = {"train_loss": [], "val_loss": []}
+    best_val_loss = float("inf")
     patience_counter = 0
-    best_layout_state = None
-    best_struct_state = None
+    best_projector_state = None
+    best_lora_params = None
 
-    print("\n--- Starting Training Phase on CSV Data ---")
+    print("\n--- Starting LLaVA-Style Adapter Training ---\n")
+    avg_loss = -1.0  # sentinel so the first progress-bar print is readable
 
-    num_epochs = 50
-    # Set to -1.0 so the very first print shows exactly -1.000000
-    avg_layout_loss, avg_struct_loss = -1.0, -1.0
+    for epoch in range(cfg.num_epochs):
+        lm_model.train()
+        projector.train()
 
-    for epoch in range(num_epochs):
-        layout_decoder.train()
-        structural_decoder.train()
-
-        layout_loss_total, struct_loss_total = 0, 0
+        epoch_loss = 0.0
         valid_samples = 0
+        optimizer.zero_grad()
 
         # --- TRAINING LOOP ---
-        for i, row in tqdm(train_embeddings.iterrows(), total=len(train_embeddings),
-                           desc=f"Epoch {epoch + 1}/{num_epochs} | Train Layout Loss: {avg_layout_loss:.6f} | Train Structure Loss: {avg_struct_loss:.6f}"):
-
-            tgt_layout, tgt_json = process_json_file(row["json-path"], cfg)
-            if tgt_layout is None or tgt_json is None or len(tgt_layout) <= 1 or len(tgt_json) <= 1:
+        for _, row in tqdm(
+            train_embeddings.iterrows(),
+            total=len(train_embeddings),
+            desc=(
+                f"Epoch {epoch + 1}/{cfg.num_epochs} "
+                f"| Loss: {avg_loss:.6f}"
+            ),
+        ):
+            # Target: cleaned, minified JSON from the Rico cleaning pipeline
+            try:
+                target_json = process_json_file(row["json-path"], minify=True)
+            except Exception:
+                continue
+            if not target_json or len(target_json) < 5:
                 continue
 
-            tgt_layout = torch.tensor(tgt_layout, dtype=torch.long).unsqueeze(0).to(device)
-            tgt_json = torch.tensor(tgt_json, dtype=torch.long).unsqueeze(0).to(device)
+            # Tokenize target (append EOS so the model learns when to stop)
+            target_enc = tokenizer(
+                target_json + tokenizer.eos_token,
+                return_tensors="pt",
+                truncation=True,
+                max_length=cfg.max_target_len,
+                padding=False,
+            ).to(device)
+            input_ids = target_enc.input_ids  # [1, seq_len]
 
-            latent_vec = torch.tensor(row["embedding"], dtype=torch.float32).unsqueeze(0).to(
-                device) if not torch.is_tensor(row["embedding"]) else row["embedding"].unsqueeze(0).to(device)
-            latent_vec = F.normalize(latent_vec, p=2, dim=-1)
+            # Project Qwen embedding -> prefix tokens
+            emb = torch.tensor(
+                row["embedding"], dtype=torch.float32
+            ).unsqueeze(0).to(device)
+            emb = F.normalize(emb, p=2, dim=-1)
+            prefix_embeds = projector(emb)  # [1, N, D]
+
+            # Target token embeddings from the LM's own embedding table
+            target_embeds = lm_model.get_input_embeddings()(input_ids)
+
+            # Concatenate: [prefix | target]
+            inputs_embeds = torch.cat([prefix_embeds, target_embeds], dim=1)
+
+            # Attention mask: every position is attended to
+            attn_mask = torch.ones(
+                1, inputs_embeds.size(1), device=device, dtype=torch.long
+            )
+
+            # Labels: -100 for prefix (no loss), real IDs for target tokens
+            prefix_labels = torch.full(
+                (1, cfg.num_prefix_tokens), -100, device=device, dtype=torch.long
+            )
+            labels = torch.cat([prefix_labels, input_ids], dim=1)
+
+            # Forward pass through the LoRA-finetuned LM
+            outputs = lm_model(
+                inputs_embeds=inputs_embeds,
+                attention_mask=attn_mask,
+                labels=labels,
+            )
+
+            loss = outputs.loss / cfg.grad_accum_steps
+            loss.backward()
             valid_samples += 1
+            epoch_loss += outputs.loss.item()
 
-            opt_layout.zero_grad()
-            layout_mask = nn.Transformer.generate_square_subsequent_mask(tgt_layout.size(1)).to(device)
-            layout_logits = layout_decoder(latent_vec, tgt_layout, tgt_mask=layout_mask)
-            loss_layout = criterion(layout_logits[:, :-1, :].reshape(-1, cfg.layout_vocab_size),
-                                    tgt_layout[:, 1:].reshape(-1))
-            loss_layout.backward()
-            torch.nn.utils.clip_grad_norm_(layout_decoder.parameters(), max_norm=1.0)
-            opt_layout.step()
-            layout_loss_total += loss_layout.item()
+            # Gradient accumulation step
+            if valid_samples % cfg.grad_accum_steps == 0:
+                torch.nn.utils.clip_grad_norm_(
+                    list(projector.parameters())
+                    + [p for p in lm_model.parameters() if p.requires_grad],
+                    max_norm=1.0,
+                )
+                optimizer.step()
+                optimizer.zero_grad()
 
-            opt_struct.zero_grad()
-            json_mask = nn.Transformer.generate_square_subsequent_mask(tgt_json.size(1)).to(device)
-            json_logits = structural_decoder(latent_vec, tgt_json, tgt_mask=json_mask)
-            loss_struct = criterion(json_logits[:, :-1, :].reshape(-1, cfg.json_vocab_size),
-                                    tgt_json[:, 1:].reshape(-1))
-            loss_struct.backward()
-            torch.nn.utils.clip_grad_norm_(structural_decoder.parameters(), max_norm=1.0)
-            opt_struct.step()
-            struct_loss_total += loss_struct.item()
+        # Flush remaining accumulated gradients
+        if valid_samples % cfg.grad_accum_steps != 0:
+            torch.nn.utils.clip_grad_norm_(
+                list(projector.parameters())
+                + [p for p in lm_model.parameters() if p.requires_grad],
+                max_norm=1.0,
+            )
+            optimizer.step()
+            optimizer.zero_grad()
 
-        avg_layout_loss = layout_loss_total / max(1, valid_samples)
-        avg_struct_loss = struct_loss_total / max(1, valid_samples)
-        history['train_layout'].append(avg_layout_loss)
-        history['train_struct'].append(avg_struct_loss)
+        avg_loss = epoch_loss / max(1, valid_samples)
+        history["train_loss"].append(avg_loss)
 
         # --- VALIDATION LOOP ---
-        layout_decoder.eval()
-        structural_decoder.eval()
-        val_layout_loss_total, val_struct_loss_total = 0, 0
-        val_valid_samples = 0
+        lm_model.eval()
+        projector.eval()
+        val_loss_total = 0.0
+        val_valid = 0
 
         with torch.no_grad():
-            for i, row in tqdm(val_embeddings.iterrows(), total=len(val_embeddings), desc="Validating", leave=False):
-                tgt_layout, tgt_json = process_json_file(row["json-path"], cfg)
-                if tgt_layout is None or tgt_json is None or len(tgt_layout) <= 1 or len(tgt_json) <= 1:
+            for _, row in tqdm(
+                val_embeddings.iterrows(),
+                total=len(val_embeddings),
+                desc="Validating",
+                leave=False,
+            ):
+                try:
+                    target_json = process_json_file(
+                        row["json-path"], minify=True
+                    )
+                except Exception:
+                    continue
+                if not target_json or len(target_json) < 5:
                     continue
 
-                tgt_layout = torch.tensor(tgt_layout, dtype=torch.long).unsqueeze(0).to(device)
-                tgt_json = torch.tensor(tgt_json, dtype=torch.long).unsqueeze(0).to(device)
+                target_enc = tokenizer(
+                    target_json + tokenizer.eos_token,
+                    return_tensors="pt",
+                    truncation=True,
+                    max_length=cfg.max_target_len,
+                    padding=False,
+                ).to(device)
+                input_ids = target_enc.input_ids
 
-                latent_vec = torch.tensor(row["embedding"], dtype=torch.float32).unsqueeze(0).to(
-                    device) if not torch.is_tensor(row["embedding"]) else row["embedding"].unsqueeze(0).to(device)
-                latent_vec = F.normalize(latent_vec, p=2, dim=-1)
-                val_valid_samples += 1
+                emb = torch.tensor(
+                    row["embedding"], dtype=torch.float32
+                ).unsqueeze(0).to(device)
+                emb = F.normalize(emb, p=2, dim=-1)
+                prefix_embeds = projector(emb)
 
-                layout_mask = nn.Transformer.generate_square_subsequent_mask(tgt_layout.size(1)).to(device)
-                layout_logits = layout_decoder(latent_vec, tgt_layout, tgt_mask=layout_mask)
-                loss_layout = criterion(layout_logits[:, :-1, :].reshape(-1, cfg.layout_vocab_size),
-                                        tgt_layout[:, 1:].reshape(-1))
-                val_layout_loss_total += loss_layout.item()
+                target_embeds = lm_model.get_input_embeddings()(input_ids)
+                inputs_embeds = torch.cat(
+                    [prefix_embeds, target_embeds], dim=1
+                )
+                attn_mask = torch.ones(
+                    1, inputs_embeds.size(1), device=device, dtype=torch.long
+                )
 
-                json_mask = nn.Transformer.generate_square_subsequent_mask(tgt_json.size(1)).to(device)
-                json_logits = structural_decoder(latent_vec, tgt_json, tgt_mask=json_mask)
-                loss_struct = criterion(json_logits[:, :-1, :].reshape(-1, cfg.json_vocab_size),
-                                        tgt_json[:, 1:].reshape(-1))
-                val_struct_loss_total += loss_struct.item()
+                prefix_labels = torch.full(
+                    (1, cfg.num_prefix_tokens),
+                    -100,
+                    device=device,
+                    dtype=torch.long,
+                )
+                labels = torch.cat([prefix_labels, input_ids], dim=1)
 
-        avg_val_layout = val_layout_loss_total / max(1, val_valid_samples)
-        avg_val_struct = val_struct_loss_total / max(1, val_valid_samples)
-        history['val_layout'].append(avg_val_layout)
-        history['val_struct'].append(avg_val_struct)
+                outputs = lm_model(
+                    inputs_embeds=inputs_embeds,
+                    attention_mask=attn_mask,
+                    labels=labels,
+                )
+                val_loss_total += outputs.loss.item()
+                val_valid += 1
 
-        combined_val_loss = avg_val_layout + avg_val_struct
-        print(f" -> Validation Layout Loss: {avg_val_layout:.6f}, Validation Structure Loss: {avg_val_struct:.6f}")
+        avg_val_loss = val_loss_total / max(1, val_valid)
+        history["val_loss"].append(avg_val_loss)
 
-        # --- EARLY STOPPING LOGIC ---
-        if combined_val_loss < best_val_loss:
-            best_val_loss = combined_val_loss
-            # Save a copy of the best weights to RAM
-            best_layout_state = {k: v.cpu().clone() for k, v in layout_decoder.state_dict().items()}
-            best_struct_state = {k: v.cpu().clone() for k, v in structural_decoder.state_dict().items()}
+        print(
+            f" -> Train Loss: {avg_loss:.6f}, Val Loss: {avg_val_loss:.6f}"
+        )
+
+        # --- EARLY STOPPING ---
+        if avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
+            best_projector_state = {
+                k: v.cpu().clone()
+                for k, v in projector.state_dict().items()
+            }
+            best_lora_params = {
+                name: param.data.cpu().clone()
+                for name, param in lm_model.named_parameters()
+                if param.requires_grad
+            }
             patience_counter = 0
-            print(f"    [*] New best validation loss! Models cached in memory.")
+            print("    [*] New best validation loss! Weights cached in memory.")
         else:
             patience_counter += 1
-            print(f"    [!] Validation did not improve. Patience: {patience_counter}/{patience}")
+            print(
+                f"    [!] No improvement. "
+                f"Patience: {patience_counter}/{cfg.patience}"
+            )
 
-        if patience_counter >= patience:
+        if patience_counter >= cfg.patience:
             print("\n--- Early Stopping Triggered! ---")
             break
 
-    # =============================================================================
-    # End of Training: Plotting & Saving
-    # =============================================================================
+    # =========================================================================
+    # End of Training: Restore Best, Save, Plot
+    # =========================================================================
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    # Load the best weights back into the models
-    if best_layout_state and best_struct_state:
-        layout_decoder.load_state_dict(best_layout_state)
-        structural_decoder.load_state_dict(best_struct_state)
-        print("Restored best model weights from memory.")
+    # Restore best projector weights
+    if best_projector_state:
+        projector.load_state_dict(best_projector_state)
+        print("Restored best projector weights.")
 
-    layout_save_path = f"adapter_model_out/layout_decoder_best_{timestamp}.pth"
-    struct_save_path = f"adapter_model_out/structural_decoder_best_{timestamp}.pth"
+    # Restore best LoRA weights
+    if best_lora_params:
+        for name, param in lm_model.named_parameters():
+            if name in best_lora_params:
+                param.data.copy_(best_lora_params[name].to(device))
+        print("Restored best LoRA weights.")
 
-    torch.save(layout_decoder.state_dict(), layout_save_path)
-    torch.save(structural_decoder.state_dict(), struct_save_path)
-    print(f"\nSaved models as:\n - {layout_save_path}\n - {struct_save_path}")
+    # Save projector
+    os.makedirs("adapter_model_out", exist_ok=True)
+    projector_path = f"adapter_model_out/projector_{timestamp}.pth"
+    torch.save(projector.state_dict(), projector_path)
+    print(f"Saved projector to: {projector_path}")
 
-    # Plot History
-    plt.figure(figsize=(14, 5))
+    # Save LoRA adapter (PEFT handles extracting only the LoRA delta weights)
+    lora_path = f"adapter_model_out/lora_adapter_{timestamp}"
+    lm_model.save_pretrained(lora_path)
+    print(f"Saved LoRA adapter to: {lora_path}")
 
-    plt.subplot(1, 2, 1)
-    plt.plot(history['train_layout'], label='Train Layout Loss', marker='o')
-    plt.plot(history['val_layout'], label='Val Layout Loss', marker='x')
-    plt.title('Layout Decoder: Train vs Validation')
-    plt.xlabel('Epochs')
-    plt.ylabel('Cross Entropy Loss')
+    # Plot training history
+    os.makedirs("adapter_training_history", exist_ok=True)
+    plt.figure(figsize=(8, 5))
+    plt.plot(history["train_loss"], label="Train Loss", marker="o")
+    plt.plot(history["val_loss"], label="Val Loss", marker="x")
+    plt.title("LLaVA-Style Adapter: Train vs Validation Loss")
+    plt.xlabel("Epoch")
+    plt.ylabel("Cross-Entropy Loss")
     plt.grid(True)
     plt.legend()
-
-    plt.subplot(1, 2, 2)
-    plt.plot(history['train_struct'], label='Train Structure Loss', marker='o')
-    plt.plot(history['val_struct'], label='Val Structure Loss', marker='x')
-    plt.title('Structural Decoder: Train vs Validation')
-    plt.xlabel('Epochs')
-    plt.ylabel('Cross Entropy Loss')
-    plt.grid(True)
-    plt.legend()
-
     plt.tight_layout()
-    plot_filename = f"adapter_training_history/training_history_{timestamp}.png"
-    plt.savefig(plot_filename)
-    print(f"Saved training history plot to '{plot_filename}'")
 
-    print("\n--- Starting Phase 4: Inference Pipeline (Using Last Loaded Validation Embedding) ---")
-    layout_decoder.eval()
-    structural_decoder.eval()
+    plot_path = f"adapter_training_history/training_history_{timestamp}.png"
+    plt.savefig(plot_path)
+    print(f"Saved training history plot to: {plot_path}")
+
+    # =========================================================================
+    # Inference Demo
+    # =========================================================================
+    print("\n--- Inference Demo (Last Validation Sample) ---")
+    lm_model.eval()
+    projector.eval()
 
     with torch.no_grad():
         last_row = val_embeddings.iloc[-1]
 
-        if not torch.is_tensor(last_row["embedding"]):
-            vec_input = torch.tensor(last_row["embedding"], dtype=torch.float32).unsqueeze(0).to(device)
-        else:
-            vec_input = last_row["embedding"].unsqueeze(0).to(device)
+        emb = torch.tensor(
+            last_row["embedding"], dtype=torch.float32
+        ).unsqueeze(0).to(device)
+        emb = F.normalize(emb, p=2, dim=-1)
+        prefix_embeds = projector(emb)
 
-        vec_input = F.normalize(vec_input, p=2, dim=-1)
+        print(f"Source: {last_row['json-path']}")
 
-        print(f"Generating for: {last_row['json-path']}")
+        generated_ids = generate_from_prefix(
+            lm_model, tokenizer, prefix_embeds,
+            max_new_tokens=cfg.max_target_len,
+        )
+        generated_text = tokenizer.decode(
+            generated_ids[0], skip_special_tokens=True
+        )
 
-        gen_layout = layout_decoder.generate(vec_input, max_length=20)
-        gen_json = structural_decoder.generate(vec_input, max_length=30)
-
-        layout_tokens_list = gen_layout[0].tolist()
-        json_tokens_list = gen_json[0].tolist()
-
-        print("\nDecoded Layout:")
-        decoded_layout = _decode_layout_tokens(layout_tokens_list, cfg)
-        print(json.dumps(decoded_layout, indent=2))
-
-        print("\nDecoded JSON:")
-        decoded_json = _decode_json_tokens(json_tokens_list, cfg)
-        print(decoded_json)
+        print(f"\nGenerated JSON ({len(generated_ids[0])} tokens):")
+        # Pretty-print if it is valid JSON
+        try:
+            parsed = json.loads(generated_text)
+            print(json.dumps(parsed, indent=2))
+        except json.JSONDecodeError:
+            print(generated_text)
+            print("\n[!] Warning: Generated text is not valid JSON.")
 
 
 if __name__ == "__main__":
