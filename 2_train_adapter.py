@@ -10,9 +10,6 @@
 # Target: minified cleaned JSON string from process_json_file()
 
 import os
-# Set visible devices before importing torch
-os.environ["CUDA_VISIBLE_DEVICES"] = "1,2,4"
-
 import json
 import torch
 import torch.nn as nn
