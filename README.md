@@ -1,6 +1,16 @@
 # screen2vec-revisited
 
-Execution Flow:
+The goal of this repository is to create new user interface screens following the RICO dataset. 
+It is a research work that should exceed the results of the screen2vec-paper.
+The screen2vec-paper is provided in HTML format in folder `screen2vec-paper`.
+In general, we seek to embed user interfaces using a VLM model (by embedding the JPEG+JSON of the screen)
+and then to perform a llava-style reconstruction.
+
+Our goal is to create better screens than the original authors could with their approach.
+
+
+
+## Code Execution Flow (= pipeline)
 
 1. Load RICO-Dataset
 2. Clean RICO-Dataset
