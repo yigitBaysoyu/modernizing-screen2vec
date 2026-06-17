@@ -314,14 +314,14 @@ def main():
     print("\n" + "-" * 50)
     print("METRICS:")
     print("-" * 50)
-    valid_icon = "\u2713" if metrics["json_valid"] else "\u2717"
+    valid_icon = "Yes" if metrics["json_valid"] else "No"
     print(f"JSON Valid               : {valid_icon}")
     print(
         f"String Similarity        : {metrics['string_similarity']:.4f} "
         f"(1.0 = perfect)"
     )
-    app_icon = "\u2713" if metrics["app_match"] else "\u2717"
-    act_icon = "\u2713" if metrics["activity_match"] else "\u2717"
+    app_icon = "Yes" if metrics["app_match"] else "No"
+    act_icon = "Yes" if metrics["activity_match"] else "No"
     print(f"App Match                : {app_icon}")
     print(f"Activity Match           : {act_icon}")
     print(f"Component Count (GT)     : {metrics['component_count_gt']}")

@@ -22,3 +22,31 @@ Execution Flow:
 ## Process Sketch
 
 ![](assets/process-draft.png)
+
+## Running JSON Reconstruction
+
+To run the JSON reconstruction and evaluation script, use the following command:
+
+```bash
+python 3_json_reconstruction.py \
+  --projector_model adapter_model_out/projector_<timestamp>.pth \
+  --lora_model adapter_model_out/lora_adapter_<timestamp> \
+  --index <index> \
+  [--csv_path embeddings.csv] \
+  [--max_tokens 1024]
+```
+
+### Parameters:
+- `--projector_model`: Path to the trained projector weights (`.pth`) file.
+- `--lora_model`: Path to the trained LoRA adapter directory.
+- `--index`: Index of the embedding row to reconstruct from the CSV file.
+- `--csv_path` *(optional)*: Path to the embeddings CSV file (defaults to `embeddings.csv`).
+- `--max_tokens` *(optional)*: Maximum tokens to generate (defaults to `1024`).
+
+### Example:
+```bash
+python 3_json_reconstruction.py \
+  --projector_model adapter_model_out/projector_20260616_183644.pth \
+  --lora_model adapter_model_out/lora_adapter_20260616_183644 \
+  --index 0
+```
