@@ -140,10 +140,19 @@ if __name__ == "__main__":
         to_glob = glob("../rico-data/data/combined/*json", recursive=True)
         to_glob = sorted(to_glob)
 
-    print("Loaded files (showing first 10):", to_glob[:10])
+    from accelerate import Accelerator
+    accelerator = Accelerator()
+    device = accelerator.device
+
+    if accelerator.is_local_main_process:
+        print("Loaded files (showing first 10):", to_glob[:10])
     assert len(to_glob) > 1
 
-    print("Loading model and processor... (This may take a while and requires ~16GB of VRAM/RAM for 8B)")
+    # Shard the dataset across processes
+    to_glob = to_glob[accelerator.process_index::accelerator.num_processes]
+
+    if accelerator.is_local_main_process:
+        print("Loading model and processor... (This may take a while and requires ~16GB of VRAM/RAM for 8B)")
 
     model_id = "../rico-data/models/Qwen3-VL-Embedding-8B"
     # model_id = "./models/Qwen3-VL-Embedding-8B"
@@ -154,19 +163,13 @@ if __name__ == "__main__":
         print("hf download Qwen/Qwen3-VL-Embedding-8B --local-dir ./models/Qwen3-VL-Embedding-8B")
         sys.exit(1)
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    if device == "cpu":
-        print("\nWARNING: CUDA not detected. Running on CPU. This will be very slow.")
-        print("Please ensure you have a CUDA-enabled PyTorch version installed.")
-
     try:
-        # Load the model with automatic device mapping (requires accelerate)
+        # Load the model directly to the assigned device
         # Using bfloat16 to avoid Out-Of-Memory errors on 16GB GPUs
         model = AutoModel.from_pretrained(
             model_id,
             dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
-            device_map="auto"
-        )
+        ).to(device)
         processor = AutoProcessor.from_pretrained(model_id)
     except Exception as e:
         print(f"\nFailed to load model from local path: {e}")
@@ -177,7 +180,7 @@ if __name__ == "__main__":
 
     # Only update tqdm on 1% step
     step_size = len(to_glob) // 100 or 1
-    pbar = tqdm(to_glob, miniters=step_size)
+    pbar = tqdm(to_glob, miniters=step_size, disable=not accelerator.is_local_main_process)
     for i, g in enumerate(pbar):
         if i % step_size == 0:
             pbar.set_description(f"Processing: {g}")
@@ -195,11 +198,16 @@ if __name__ == "__main__":
             append_to_csv_safely(csv_output_file, g, embedding)
             successful_embeddings_count += 1
 
-    end_time = time.time()
-    elapsed_seconds = int(end_time - start_time)
-    hours, remainder = divmod(elapsed_seconds, 3600)
-    minutes, seconds = divmod(remainder, 60)
+    # Wait for all processes to finish before printing summary
+    accelerator.wait_for_everyone()
 
-    print(f"\n--- Execution Summary ---")
-    print(f"Total time elapsed: {hours} hours, {minutes} minutes, {seconds} seconds")
-    print(f"Total embeddings performed: {successful_embeddings_count}")
+    if accelerator.is_local_main_process:
+        end_time = time.time()
+        elapsed_seconds = int(end_time - start_time)
+        hours, remainder = divmod(elapsed_seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+
+        print(f"\n--- Execution Summary ---")
+        print(f"Total time elapsed: {hours} hours, {minutes} minutes, {seconds} seconds")
+        # Note: count is per process, so this is just for the main process shard
+        print(f"Embeddings performed on main process: {successful_embeddings_count}")
