@@ -20,6 +20,7 @@ import pandas as pd
 import orjson
 import argparse
 import difflib
+import numpy as np
 
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import PeftModel
@@ -188,7 +189,7 @@ def main():
     # 1. Load embeddings
     # -------------------------------------------------------------------------
     print(f"[*] Loading CSV from: {args.csv_path}")
-    df = pd.read_csv(args.csv_path, names=["json-path", "embedding"], header=None)
+    df = pd.read_csv(args.csv_path, names=["json-path", "embedding_path"], header=None)
 
     if args.index >= len(df) or args.index < 0:
         print(
@@ -201,7 +202,8 @@ def main():
     json_path = row["json-path"].replace(
         "/lustre/scratch/sgjolieb-screen2vec", ".."
     )
-    raw_embedding = orjson.loads(row["embedding"])
+    emb_data = np.load(row["embedding_path"])
+    raw_embedding = emb_data["embedding"]
 
     # -------------------------------------------------------------------------
     # 2. Load models

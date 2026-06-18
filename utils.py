@@ -4,6 +4,7 @@ import orjson
 import pandas as pd
 import torch
 import torch.nn as nn
+import numpy as np
 
 
 CUDA_VISIBLE_DEVICE: str = str(3)
@@ -418,15 +419,19 @@ def _decode_json_tokens(token_list, config):
     return json.dumps(mock_tree, indent=2)
 
 
-def load_embeddings_from_csv(filepath="../rico-data/embeddings/embeddings_qwen.csv"):
+def load_embeddings_from_csv(filepath="embeddings.csv"):
     """Loads all pre-computed Qwen embeddings from the CSV file."""
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"Error: The required file '{filepath}' was not found. Execution aborted.")
 
-    df = pd.read_csv(filepath, names=["json-path", "embedding"], header=None)
+    df = pd.read_csv(filepath, names=["json-path", "embedding_path"], header=None)
 
-    # Convert string representation of list back to an actual Python list and fix paths
-    df["embedding"] = [orjson.loads(x) for x in df["embedding"]]
+    # Load from .npz files instead of parsing JSON
+    embeddings = []
+    for path in df["embedding_path"]:
+        data = np.load(path)
+        embeddings.append(data["embedding"].astype(np.float32))
+    df["embedding"] = embeddings
     df["json-path"] = df["json-path"].apply(lambda x: x.replace("/lustre/scratch/sgjolieb-screen2vec", ".."))
     df["jpg-path"] = df["json-path"].apply(lambda x: x.replace(".json", ".jpg"))
 

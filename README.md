@@ -58,5 +58,7 @@ python 3_json_reconstruction.py \
 python 3_json_reconstruction.py \
   --projector_model adapter_model_out/projector_20260616_183644.pth \
   --lora_model adapter_model_out/lora_adapter_20260616_183644 \
-  --index 0
+  --index 2
 ```
+
+(use `--index 2` because the early indexes are progressive web apps only having a webview.)
