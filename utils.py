@@ -419,22 +419,6 @@ def _decode_json_tokens(token_list, config):
     return json.dumps(mock_tree, indent=2)
 
 
-def _load_single_embedding(item):
-    item_str = str(item).strip()
-    if item_str.startswith('[') and item_str.endswith(']'):
-        try:
-            return np.array(orjson.loads(item_str), dtype=np.float32)
-        except Exception:
-            try:
-                import json
-                return np.array(json.loads(item_str), dtype=np.float32)
-            except Exception as e2:
-                raise ValueError(f"Failed to parse inline JSON embedding array: {e2}")
-    else:
-        data = np.load(item_str)
-        return data["embedding"].astype(np.float32)
-
-
 def load_embeddings_from_csv(filepath="embeddings.csv"):
     """Loads all pre-computed Qwen embeddings from the CSV file."""
     if not os.path.exists(filepath):
@@ -443,30 +427,32 @@ def load_embeddings_from_csv(filepath="embeddings.csv"):
     df = pd.read_csv(filepath, names=["json-path", "embedding_path_or_val"], header=None)
 
     from tqdm import tqdm
-    from concurrent.futures import ThreadPoolExecutor
     # Only show the progress bar on the main process to prevent duplicate stdout logs under accelerate launch
     is_main_process = os.environ.get("LOCAL_RANK", "0") == "0"
 
-    total = len(df)
-    num_workers = min(os.cpu_count() or 4, 16)
-
-    embeddings = [None] * total
-
-    def load_task(idx_item):
-        idx, item = idx_item
-        embeddings[idx] = _load_single_embedding(item)
-
-    if is_main_process:
-        print(f"Loading {total} embeddings in parallel using {num_workers} threads...", flush=True)
-
-    with ThreadPoolExecutor(max_workers=num_workers) as executor:
-        tasks = list(enumerate(df["embedding_path_or_val"]))
-        list(tqdm(
-            executor.map(load_task, tasks),
-            total=total,
-            desc="Loading embeddings",
-            disable=not is_main_process
-        ))
+    # Support both loading from .npz files and parsing legacy inline JSON embedding lists
+    embeddings = []
+    for item in tqdm(
+        df["embedding_path_or_val"], 
+        desc="Loading embeddings", 
+        disable=not is_main_process
+    ):
+        item_str = str(item).strip()
+        if item_str.startswith('[') and item_str.endswith(']'):
+            try:
+                # Use high-performance orjson parser
+                emb = np.array(orjson.loads(item_str), dtype=np.float32)
+                embeddings.append(emb)
+            except Exception as e:
+                try:
+                    # Fallback to standard library json parser
+                    emb = np.array(json.loads(item_str), dtype=np.float32)
+                    embeddings.append(emb)
+                except Exception as e2:
+                    raise ValueError(f"Failed to parse inline JSON embedding array: {e2}")
+        else:
+            data = np.load(item_str)
+            embeddings.append(data["embedding"].astype(np.float32))
 
     df["embedding"] = embeddings
     df = df.drop(columns=["embedding_path_or_val"])
