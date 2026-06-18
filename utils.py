@@ -426,16 +426,30 @@ def load_embeddings_from_csv(filepath="embeddings.csv"):
 
     df = pd.read_csv(filepath, names=["json-path", "embedding_path_or_val"], header=None)
 
+    from tqdm import tqdm
+    # Only show the progress bar on the main process to prevent duplicate stdout logs under accelerate launch
+    is_main_process = os.environ.get("LOCAL_RANK", "0") == "0"
+
     # Support both loading from .npz files and parsing legacy inline JSON embedding lists
     embeddings = []
-    for item in df["embedding_path_or_val"]:
+    for item in tqdm(
+        df["embedding_path_or_val"], 
+        desc="Loading embeddings", 
+        disable=not is_main_process
+    ):
         item_str = str(item).strip()
         if item_str.startswith('[') and item_str.endswith(']'):
             try:
-                emb = np.array(json.loads(item_str), dtype=np.float32)
+                # Use high-performance orjson parser
+                emb = np.array(orjson.loads(item_str), dtype=np.float32)
                 embeddings.append(emb)
             except Exception as e:
-                raise ValueError(f"Failed to parse inline JSON embedding array: {e}")
+                try:
+                    # Fallback to standard library json parser
+                    emb = np.array(json.loads(item_str), dtype=np.float32)
+                    embeddings.append(emb)
+                except Exception as e2:
+                    raise ValueError(f"Failed to parse inline JSON embedding array: {e2}")
         else:
             data = np.load(item_str)
             embeddings.append(data["embedding"].astype(np.float32))
@@ -445,7 +459,8 @@ def load_embeddings_from_csv(filepath="embeddings.csv"):
     df["json-path"] = df["json-path"].apply(lambda x: x.replace("/lustre/scratch/sgjolieb-screen2vec", ".."))
     df["jpg-path"] = df["json-path"].apply(lambda x: x.replace(".json", ".jpg"))
 
-    print(f"Successfully loaded {len(df)} embeddings.")
+    if is_main_process:
+        print(f"Successfully loaded {len(df)} embeddings.")
     return df
 
 
