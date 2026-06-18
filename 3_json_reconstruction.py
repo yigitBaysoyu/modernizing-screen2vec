@@ -20,6 +20,7 @@ import pandas as pd
 import orjson
 import argparse
 import difflib
+import numpy as np
 
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import PeftModel
@@ -188,7 +189,7 @@ def main():
     # 1. Load embeddings
     # -------------------------------------------------------------------------
     print(f"[*] Loading CSV from: {args.csv_path}")
-    df = pd.read_csv(args.csv_path, names=["json-path", "embedding"], header=None)
+    df = pd.read_csv(args.csv_path, names=["json-path", "embedding_path"], header=None)
 
     if args.index >= len(df) or args.index < 0:
         print(
@@ -201,7 +202,8 @@ def main():
     json_path = row["json-path"].replace(
         "/lustre/scratch/sgjolieb-screen2vec", ".."
     )
-    raw_embedding = orjson.loads(row["embedding"])
+    emb_data = np.load(row["embedding_path"])
+    raw_embedding = emb_data["embedding"]
 
     # -------------------------------------------------------------------------
     # 2. Load models
@@ -314,14 +316,14 @@ def main():
     print("\n" + "-" * 50)
     print("METRICS:")
     print("-" * 50)
-    valid_icon = "\u2713" if metrics["json_valid"] else "\u2717"
+    valid_icon = "Yes" if metrics["json_valid"] else "No"
     print(f"JSON Valid               : {valid_icon}")
     print(
         f"String Similarity        : {metrics['string_similarity']:.4f} "
         f"(1.0 = perfect)"
     )
-    app_icon = "\u2713" if metrics["app_match"] else "\u2717"
-    act_icon = "\u2713" if metrics["activity_match"] else "\u2717"
+    app_icon = "Yes" if metrics["app_match"] else "No"
+    act_icon = "Yes" if metrics["activity_match"] else "No"
     print(f"App Match                : {app_icon}")
     print(f"Activity Match           : {act_icon}")
     print(f"Component Count (GT)     : {metrics['component_count_gt']}")

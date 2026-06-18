@@ -34,10 +34,10 @@ class AdapterConfig:
     qwen_embed_dim = 4096
 
     # Projector: maps Qwen embedding -> virtual prefix tokens for the LM
-    num_prefix_tokens = 8
+    num_prefix_tokens = 128
 
     # Small LM for generation (auto-downloaded from HuggingFace on first run)
-    lm_model_id = "Qwen/Qwen2.5-0.5B"
+    lm_model_id = "Qwen/Qwen2.5-1.5B"
 
     # LoRA fine-tuning parameters
     lora_r = 16
@@ -50,7 +50,7 @@ class AdapterConfig:
     lr_lora = 2e-5            # Learning rate for LoRA parameters
     num_epochs = 20
     patience = 3              # Early stopping patience
-    max_target_len = 1024     # Max tokens for the target JSON string
+    max_target_len = 2048     # Max tokens for the target JSON string
     grad_accum_steps = 4      # Gradient accumulation steps
 
 
@@ -83,22 +83,21 @@ class EmbeddingProjector(nn.Module):
         self.num_prefix_tokens = num_prefix_tokens
         self.lm_hidden_dim = lm_hidden_dim
 
-        out_dim = num_prefix_tokens * lm_hidden_dim
         self.projector = nn.Sequential(
-            nn.Linear(qwen_dim, out_dim),
+            nn.Linear(qwen_dim, lm_hidden_dim * 2),
             nn.GELU(),
-            nn.Linear(out_dim, out_dim),
+            nn.Linear(lm_hidden_dim * 2, lm_hidden_dim),
         )
 
     def forward(self, qwen_embedding):
         """
         Args:
-            qwen_embedding: [B, qwen_dim] pre-computed Qwen3-VL embeddings.
+            qwen_embedding: [B, num_prefix_tokens, qwen_dim] pre-computed Qwen3-VL embeddings.
         Returns:
             [B, num_prefix_tokens, lm_hidden_dim] virtual prefix token embeddings.
         """
         projected = self.projector(qwen_embedding)
-        return projected.view(-1, self.num_prefix_tokens, self.lm_hidden_dim)
+        return projected
 
 
 # =============================================================================

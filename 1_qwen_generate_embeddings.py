@@ -7,6 +7,7 @@ import gc
 import csv
 import socket
 import time
+import numpy as np
 
 from utils import _minify_json, process_json_file
 
@@ -31,15 +32,23 @@ os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
 def append_to_csv_safely(csv_path, file_path, embedding):
     """
-    Safely appends a file path and its corresponding embedding to a CSV file.
+    Saves embedding to .npz and appends the file path to a CSV file.
     Uses file locking to ensure thread/process safety.
     """
+    emb_dir = "embeddings"
+    os.makedirs(emb_dir, exist_ok=True)
+    base_name = os.path.basename(file_path).replace('.json', '.npz')
+    emb_path = os.path.join(emb_dir, base_name)
+    
+    # Save as compressed numpy array (fp16 to save space)
+    np.savez_compressed(emb_path, embedding=embedding.astype(np.float16))
+
     with open(csv_path, "a", newline="", encoding="utf-8") as f:
         if fcntl:
             fcntl.flock(f.fileno(), fcntl.LOCK_EX)
         try:
             writer = csv.writer(f)
-            writer.writerow([file_path, json.dumps(embedding.tolist())])
+            writer.writerow([file_path, emb_path])
             f.flush()
             os.fsync(f.fileno())  # Ensure data is written to disk immediately
         finally:
@@ -100,12 +109,13 @@ def main(json_path, image_path, model, processor):
     with torch.no_grad():
         outputs = model(**inputs, output_hidden_states=True)
         # Extract the hidden states from the last layer for all tokens
-        last_hidden_states = outputs.hidden_states[-1]
+        last_hidden_states = outputs.hidden_states[-1] # Shape: [1, seq_len, 4096]
 
-        # Simple mean pooling over the sequence dimension to generate a single vector
-        # Note: The official Qwen3-VL-Embedding might have specific EOS token pooling instructions,
-        # but mean pooling is a solid fallback for multimodal representation.
-        embedding = last_hidden_states.mean(dim=1).squeeze().cpu().float().numpy()
+        # Use adaptive average pooling to pool the sequence dimension down to exactly 128 tokens
+        # We must permute to [batch, channels, seq_len] for 1d pooling, then permute back.
+        pooled = torch.nn.functional.adaptive_avg_pool1d(last_hidden_states.permute(0, 2, 1), 128).permute(0, 2, 1)
+
+        embedding = pooled.squeeze(0).cpu().float().numpy() # Shape: [128, 4096]
 
     # Explicitly free VRAM to prevent memory leaks in the loop
     del inputs
