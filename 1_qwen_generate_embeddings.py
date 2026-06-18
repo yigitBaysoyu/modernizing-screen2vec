@@ -22,11 +22,6 @@ from qwen_vl_utils import process_vision_info
 from glob import glob
 from tqdm import tqdm
 
-if socket.gethostname().lower() == "hci-nc":
-    os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-elif socket.gethostname().lower() == "midas":
-    os.environ["CUDA_VISIBLE_DEVICES"] = "3"
-
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
 
