@@ -48,7 +48,7 @@ class AdapterConfig:
     # Training hyperparameters
     lr_projector = 1e-4       # Learning rate for the MLP projector
     lr_lora = 2e-5            # Learning rate for LoRA parameters
-    num_epochs = 20
+    num_epochs = 100
     patience = 3              # Early stopping patience
     max_target_len = 2048     # Max tokens for the target JSON string
     grad_accum_steps = 4      # Gradient accumulation steps
