@@ -424,14 +424,24 @@ def load_embeddings_from_csv(filepath="embeddings.csv"):
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"Error: The required file '{filepath}' was not found. Execution aborted.")
 
-    df = pd.read_csv(filepath, names=["json-path", "embedding_path"], header=None)
+    df = pd.read_csv(filepath, names=["json-path", "embedding_path_or_val"], header=None)
 
-    # Load from .npz files instead of parsing JSON
+    # Support both loading from .npz files and parsing legacy inline JSON embedding lists
     embeddings = []
-    for path in df["embedding_path"]:
-        data = np.load(path)
-        embeddings.append(data["embedding"].astype(np.float32))
+    for item in df["embedding_path_or_val"]:
+        item_str = str(item).strip()
+        if item_str.startswith('[') and item_str.endswith(']'):
+            try:
+                emb = np.array(json.loads(item_str), dtype=np.float32)
+                embeddings.append(emb)
+            except Exception as e:
+                raise ValueError(f"Failed to parse inline JSON embedding array: {e}")
+        else:
+            data = np.load(item_str)
+            embeddings.append(data["embedding"].astype(np.float32))
+
     df["embedding"] = embeddings
+    df = df.drop(columns=["embedding_path_or_val"])
     df["json-path"] = df["json-path"].apply(lambda x: x.replace("/lustre/scratch/sgjolieb-screen2vec", ".."))
     df["jpg-path"] = df["json-path"].apply(lambda x: x.replace(".json", ".jpg"))
 
