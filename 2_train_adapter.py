@@ -92,10 +92,14 @@ class EmbeddingProjector(nn.Module):
     def forward(self, qwen_embedding):
         """
         Args:
-            qwen_embedding: [B, num_prefix_tokens, qwen_dim] pre-computed Qwen3-VL embeddings.
+            qwen_embedding: [B, num_prefix_tokens, qwen_dim] or legacy [B, qwen_dim] pre-computed Qwen3-VL embeddings.
         Returns:
             [B, num_prefix_tokens, lm_hidden_dim] virtual prefix token embeddings.
         """
+        if qwen_embedding.dim() == 2:
+            # Legacy 1D embedding: [B, qwen_dim] -> [B, num_prefix_tokens, qwen_dim]
+            qwen_embedding = qwen_embedding.unsqueeze(1).expand(-1, self.num_prefix_tokens, -1)
+
         projected = self.projector(qwen_embedding)
         return projected
 
