@@ -25,7 +25,7 @@ import numpy as np
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import PeftModel
 
-from utils import process_json_file, CUDA_VISIBLE_DEVICE
+from utils import process_json_file, CUDA_VISIBLE_DEVICE, load_embeddings
 
 os.environ["CUDA_VISIBLE_DEVICES"] = CUDA_VISIBLE_DEVICE
 
@@ -168,11 +168,15 @@ def main():
     )
     parser.add_argument(
         "--index", type=int, required=True,
-        help="Index of the embedding in the CSV file",
+        help="Index of the embedding to reconstruct",
     )
     parser.add_argument(
-        "--csv_path", type=str, default="embeddings.csv",
-        help="Path to embeddings CSV",
+        "--embeddings_dir", type=str, default="embeddings",
+        help="Path to embeddings directory",
+    )
+    parser.add_argument(
+        "--data_dir", type=str, default=None,
+        help="Path to raw Rico JSON/JPG files (optional)",
     )
     parser.add_argument(
         "--max_tokens", type=int, default=1024,
@@ -188,17 +192,21 @@ def main():
     # -------------------------------------------------------------------------
     # 1. Load embeddings
     # -------------------------------------------------------------------------
-    csv_path = args.csv_path
-    if not os.path.exists(csv_path):
-        alt_path = os.path.join("embeddings", os.path.basename(csv_path))
-        if os.path.exists(alt_path):
-            csv_path = alt_path
-        else:
-            print(f"[-] Error: CSV file not found at {csv_path} (or {alt_path})")
-            return
+    embeddings_dir = args.embeddings_dir
+    if not os.path.exists(embeddings_dir):
+        print(f"[-] Error: Embeddings directory not found at {embeddings_dir}")
+        return
 
-    print(f"[*] Loading CSV from: {csv_path}")
-    df = pd.read_csv(csv_path, names=["json-path", "embedding_path"], header=None)
+    print(f"[*] Scanning and loading embeddings from: {embeddings_dir}")
+    try:
+        df = load_embeddings(embeddings_dir=embeddings_dir, data_dir=args.data_dir)
+    except Exception as e:
+        print(f"[-] Error loading embeddings: {e}")
+        return
+
+    if df.empty:
+        print("[-] Error: No matching embeddings loaded.")
+        return
 
     if args.index >= len(df) or args.index < 0:
         print(
@@ -208,21 +216,8 @@ def main():
         return
 
     row = df.iloc[args.index]
-    json_path = row["json-path"].replace(
-        "/lustre/scratch/sgjolieb-screen2vec", ".."
-    )
-    
-    embedding_path = row["embedding_path"]
-    if not os.path.exists(embedding_path):
-        alt_emb_path = os.path.join("embeddings", os.path.basename(embedding_path))
-        if os.path.exists(alt_emb_path):
-            embedding_path = alt_emb_path
-        else:
-            print(f"[-] Error: Embedding file not found at {embedding_path} (or {alt_emb_path})")
-            return
-
-    emb_data = np.load(embedding_path)
-    raw_embedding = emb_data["embedding"]
+    json_path = row["json-path"]
+    raw_embedding = row["embedding"]
 
     # -------------------------------------------------------------------------
     # 2. Load models

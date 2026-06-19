@@ -42,15 +42,17 @@ python 3_json_reconstruction.py \
   --projector_model adapter_model_out/projector_<timestamp>.pth \
   --lora_model adapter_model_out/lora_adapter_<timestamp> \
   --index <index> \
-  [--csv_path embeddings.csv] \
+  [--embeddings_dir embeddings] \
+  [--data_dir <path_to_rico_combined>] \
   [--max_tokens 1024]
 ```
 
 ### Parameters:
 - `--projector_model`: Path to the trained projector weights (`.pth`) file.
 - `--lora_model`: Path to the trained LoRA adapter directory.
-- `--index`: Index of the embedding row to reconstruct from the CSV file.
-- `--csv_path` *(optional)*: Path to the embeddings CSV file (defaults to `embeddings.csv`).
+- `--index`: Index of the embedding to reconstruct.
+- `--embeddings_dir` *(optional)*: Path to the embeddings directory (defaults to `embeddings`).
+- `--data_dir` *(optional)*: Path to raw Rico JSON/JPG directory (optional, searches standard paths if omitted).
 - `--max_tokens` *(optional)*: Maximum tokens to generate (defaults to `1024`).
 
 ### Example:

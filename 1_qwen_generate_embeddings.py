@@ -4,17 +4,11 @@ import os
 import json
 import sys
 import gc
-import csv
 import socket
 import time
 import numpy as np
 
 from utils import _minify_json, process_json_file
-
-try:
-    import fcntl
-except ImportError:
-    fcntl = None
 
 import torch
 from transformers import AutoModel, AutoProcessor
@@ -25,11 +19,8 @@ from tqdm import tqdm
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
 
-def append_to_csv_safely(csv_path, file_path, embedding):
-    """
-    Saves embedding to .npz and appends the file path to a CSV file.
-    Uses file locking to ensure thread/process safety.
-    """
+def save_embedding_npz(file_path, embedding):
+    """Saves embedding to a compressed .npz file named after the source JSON."""
     emb_dir = "embeddings"
     os.makedirs(emb_dir, exist_ok=True)
     base_name = os.path.basename(file_path).replace('.json', '.npz')
@@ -37,18 +28,6 @@ def append_to_csv_safely(csv_path, file_path, embedding):
     
     # Save as compressed numpy array (fp16 to save space)
     np.savez_compressed(emb_path, embedding=embedding.astype(np.float16))
-
-    with open(csv_path, "a", newline="", encoding="utf-8") as f:
-        if fcntl:
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-        try:
-            writer = csv.writer(f)
-            writer.writerow([file_path, emb_path])
-            f.flush()
-            os.fsync(f.fileno())  # Ensure data is written to disk immediately
-        finally:
-            if fcntl:
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 
 def main(json_path, image_path, model, processor):
@@ -171,8 +150,6 @@ if __name__ == "__main__":
         print("Tip: Ensure the model data is not corrupted and accelerate is installed.")
         sys.exit(1)
 
-    csv_output_file = "embeddings.csv"
-
     # Only update tqdm on 1% step
     step_size = len(to_glob) // 100 or 1
     pbar = tqdm(to_glob, miniters=step_size, disable=not accelerator.is_local_main_process)
@@ -190,7 +167,7 @@ if __name__ == "__main__":
             continue
 
         if embedding is not None:
-            append_to_csv_safely(csv_output_file, g, embedding)
+            save_embedding_npz(g, embedding)
             successful_embeddings_count += 1
 
     # Wait for all processes to finish before printing summary

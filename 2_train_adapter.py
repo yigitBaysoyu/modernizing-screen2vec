@@ -21,7 +21,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import get_peft_model, LoraConfig, TaskType
 from accelerate import Accelerator
 
-from utils import load_embeddings_from_csv, process_json_file
+from utils import load_embeddings, process_json_file
 
 
 # =============================================================================
@@ -163,7 +163,7 @@ def main():
     # 1. Load pre-computed embeddings
     # -------------------------------------------------------------------------
     try:
-        all_embeddings = load_embeddings_from_csv("embeddings.csv")
+        all_embeddings = load_embeddings("embeddings")
     except Exception as e:
         print(f"Critical error: {e}")
         return

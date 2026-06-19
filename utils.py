@@ -419,58 +419,79 @@ def _decode_json_tokens(token_list, config):
     return json.dumps(mock_tree, indent=2)
 
 
-def load_embeddings_from_csv(filepath="embeddings.csv"):
-    """Loads all pre-computed Qwen embeddings from the CSV file."""
-    if not os.path.exists(filepath):
-        # Fallback: check if the file is inside the 'embeddings' directory/symlink
-        alt_path = os.path.join("embeddings", os.path.basename(filepath))
-        if os.path.exists(alt_path):
-            filepath = alt_path
-        else:
-            raise FileNotFoundError(f"Error: The required file '{filepath}' (or '{alt_path}') was not found. Execution aborted.")
+def load_embeddings(embeddings_dir="embeddings", data_dir=None):
+    """
+    Finds all .npz files in embeddings_dir, locates their matching raw Rico .json
+    files, and loads them into a pandas DataFrame.
+    """
+    import glob
 
-    df = pd.read_csv(filepath, names=["json-path", "embedding_path_or_val"], header=None)
+    if not os.path.exists(embeddings_dir):
+        raise FileNotFoundError(f"Error: The embeddings directory '{embeddings_dir}' was not found.")
+
+    if data_dir is None:
+        # Check standard default paths
+        search_dirs = ["../rico-data/data/combined", "data/rico-examples", "rico/examples"]
+    elif isinstance(data_dir, (list, tuple)):
+        search_dirs = list(data_dir)
+    else:
+        search_dirs = [data_dir]
+
+    npz_paths = sorted(glob.glob(os.path.join(embeddings_dir, "*.npz")))
 
     from tqdm import tqdm
-    # Only show the progress bar on the main process to prevent duplicate stdout logs under accelerate launch
     is_main_process = os.environ.get("LOCAL_RANK", "0") == "0"
 
-    # Support both loading from .npz files and parsing legacy inline JSON embedding lists
+    records = []
+    for npz_path in npz_paths:
+        base_name = os.path.basename(npz_path)
+        json_name = base_name.replace(".npz", ".json")
+        jpg_name = base_name.replace(".npz", ".jpg")
+
+        # Search for the matching JSON file in the directories
+        found_json_path = None
+        found_jpg_path = None
+        for d in search_dirs:
+            candidate_json = os.path.join(d, json_name)
+            if os.path.exists(candidate_json):
+                found_json_path = candidate_json
+                candidate_jpg = os.path.join(d, jpg_name)
+                if os.path.exists(candidate_jpg):
+                    found_jpg_path = candidate_jpg
+                else:
+                    found_jpg_path = candidate_json.replace(".json", ".jpg")
+                break
+
+        if found_json_path:
+            records.append({
+                "json-path": found_json_path,
+                "jpg-path": found_jpg_path,
+                "embedding_path": npz_path
+            })
+
+    if not records:
+        if is_main_process:
+            print(f"Warning: No matching JSON files found in {search_dirs} for embeddings in '{embeddings_dir}'.")
+        return pd.DataFrame(columns=["json-path", "jpg-path", "embedding"])
+
+    df = pd.DataFrame(records)
+
     embeddings = []
-    for item in tqdm(
-        df["embedding_path_or_val"], 
-        desc="Loading embeddings", 
+    for path in tqdm(
+        df["embedding_path"],
+        desc="Loading embeddings",
         disable=not is_main_process
     ):
-        item_str = str(item).strip()
-        if item_str.startswith('[') and item_str.endswith(']'):
-            try:
-                # Use high-performance orjson parser
-                emb = np.array(orjson.loads(item_str), dtype=np.float32)
-                embeddings.append(emb)
-            except Exception as e:
-                try:
-                    # Fallback to standard library json parser
-                    emb = np.array(json.loads(item_str), dtype=np.float32)
-                    embeddings.append(emb)
-                except Exception as e2:
-                    raise ValueError(f"Failed to parse inline JSON embedding array: {e2}")
-        else:
-            if not os.path.exists(item_str):
-                alt_item = os.path.join("embeddings", os.path.basename(item_str))
-                if os.path.exists(alt_item):
-                    item_str = alt_item
-            data = np.load(item_str)
-            embeddings.append(data["embedding"].astype(np.float32))
+        with np.load(path) as f_data:
+            embeddings.append(f_data["embedding"].astype(np.float32))
 
     df["embedding"] = embeddings
-    df = df.drop(columns=["embedding_path_or_val"])
-    df["json-path"] = df["json-path"].apply(lambda x: x.replace("/lustre/scratch/sgjolieb-screen2vec", ".."))
-    df["jpg-path"] = df["json-path"].apply(lambda x: x.replace(".json", ".jpg"))
+    df = df.drop(columns=["embedding_path"])
 
     if is_main_process:
         print(f"Successfully loaded {len(df)} embeddings.")
     return df
+
 
 
 # ==========================================
