@@ -422,7 +422,12 @@ def _decode_json_tokens(token_list, config):
 def load_embeddings_from_csv(filepath="embeddings.csv"):
     """Loads all pre-computed Qwen embeddings from the CSV file."""
     if not os.path.exists(filepath):
-        raise FileNotFoundError(f"Error: The required file '{filepath}' was not found. Execution aborted.")
+        # Fallback: check if the file is inside the 'embeddings' directory/symlink
+        alt_path = os.path.join("embeddings", os.path.basename(filepath))
+        if os.path.exists(alt_path):
+            filepath = alt_path
+        else:
+            raise FileNotFoundError(f"Error: The required file '{filepath}' (or '{alt_path}') was not found. Execution aborted.")
 
     df = pd.read_csv(filepath, names=["json-path", "embedding_path_or_val"], header=None)
 
@@ -451,6 +456,10 @@ def load_embeddings_from_csv(filepath="embeddings.csv"):
                 except Exception as e2:
                     raise ValueError(f"Failed to parse inline JSON embedding array: {e2}")
         else:
+            if not os.path.exists(item_str):
+                alt_item = os.path.join("embeddings", os.path.basename(item_str))
+                if os.path.exists(alt_item):
+                    item_str = alt_item
             data = np.load(item_str)
             embeddings.append(data["embedding"].astype(np.float32))
 

@@ -188,8 +188,17 @@ def main():
     # -------------------------------------------------------------------------
     # 1. Load embeddings
     # -------------------------------------------------------------------------
-    print(f"[*] Loading CSV from: {args.csv_path}")
-    df = pd.read_csv(args.csv_path, names=["json-path", "embedding_path"], header=None)
+    csv_path = args.csv_path
+    if not os.path.exists(csv_path):
+        alt_path = os.path.join("embeddings", os.path.basename(csv_path))
+        if os.path.exists(alt_path):
+            csv_path = alt_path
+        else:
+            print(f"[-] Error: CSV file not found at {csv_path} (or {alt_path})")
+            return
+
+    print(f"[*] Loading CSV from: {csv_path}")
+    df = pd.read_csv(csv_path, names=["json-path", "embedding_path"], header=None)
 
     if args.index >= len(df) or args.index < 0:
         print(
@@ -202,7 +211,17 @@ def main():
     json_path = row["json-path"].replace(
         "/lustre/scratch/sgjolieb-screen2vec", ".."
     )
-    emb_data = np.load(row["embedding_path"])
+    
+    embedding_path = row["embedding_path"]
+    if not os.path.exists(embedding_path):
+        alt_emb_path = os.path.join("embeddings", os.path.basename(embedding_path))
+        if os.path.exists(alt_emb_path):
+            embedding_path = alt_emb_path
+        else:
+            print(f"[-] Error: Embedding file not found at {embedding_path} (or {alt_emb_path})")
+            return
+
+    emb_data = np.load(embedding_path)
     raw_embedding = emb_data["embedding"]
 
     # -------------------------------------------------------------------------
