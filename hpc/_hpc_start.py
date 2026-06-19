@@ -137,6 +137,9 @@ cd $TASK_DIR
 # Load HPC modules
 module load anaconda3/2023
 
+# Ensure user-installed python binaries are in PATH
+export PATH=$HOME/.local/bin:$PATH
+
 # Install requirements
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 pip install -r requirements.txt
