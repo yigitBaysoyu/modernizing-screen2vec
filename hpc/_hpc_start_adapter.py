@@ -19,7 +19,7 @@ JOBS_PER_BATCH = 10000
 SCRATCH_ROOT = "/lustre/scratch/sgjolieb-screen2vec" if not platform.system() == "Windows" else "C:\\Users\\Jonathan\\Dev"
 PROJECT_NAME = "s2v"
 DATA_DIR_NAME = "rico-data"
-runtarget = "gpu-big"  # or "gpu-small" / "cpu"
+runtarget = "GPU-H200"  # or "gpu-small" / "cpu"
 run_exclusive = False  # or True if you want the entire node
 NUM_GPU: int = 8  # 1..4; how many GPUs to reserve per job
 NOW = datetime.now()
