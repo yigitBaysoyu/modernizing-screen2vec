@@ -438,6 +438,19 @@ def main():
             patience_counter = 0
             if accelerator.is_local_main_process:
                 print("    [*] New best validation loss! Weights cached in memory.")
+                
+                # Automatically save the best model directly to disk
+                os.makedirs("adapter_model_out", exist_ok=True)
+                best_projector_path = "adapter_model_out/best_projector.pth"
+                best_lora_path = "adapter_model_out/best_lora_adapter"
+                
+                unwrapped_projector = accelerator.unwrap_model(projector)
+                unwrapped_lm = accelerator.unwrap_model(lm_model)
+                
+                # Save to disk (overwriting the previous best)
+                torch.save(unwrapped_projector.state_dict(), best_projector_path)
+                unwrapped_lm.save_pretrained(best_lora_path)
+                print(f"    [*] Saved best model checkpoint to disk: {best_projector_path} and {best_lora_path}")
         else:
             patience_counter += 1
             if accelerator.is_local_main_process:
