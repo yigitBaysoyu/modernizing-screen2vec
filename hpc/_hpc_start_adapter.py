@@ -67,19 +67,19 @@ def get_hpc_slurm_directives(jobname: str, num_tasks: int):
     partition = ""
     timelimit = "#SBATCH --time=0-24:00:00"
 
-    if runtarget == "gpu-small":
+    if runtarget.lower() == "gpu-small".lower():
         gres = f"#SBATCH --gres=gpu:{NUM_GPU}"
         partition = "#SBATCH --partition=GPU-small"
         timelimit = "#SBATCH --time=2-00:00:00"
-    elif runtarget == "gpu-big":
+    elif runtarget.lower() == "gpu-big".lower():
         gres = f"#SBATCH --gres=gpu:{NUM_GPU}"
         partition = "#SBATCH --partition=GPU-big"
         timelimit = "#SBATCH --time=2-00:00:00"
     elif runtarget.lower() == "gpu-H200".lower():
         gres = f"#SBATCH --gres=gpu:{NUM_GPU}"
-        partition = "#SBATCH --partition=gpu-H200"
+        partition = "#SBATCH --partition=GPU-H200"
         timelimit = "#SBATCH --time=2-00:00:00"
-    elif runtarget == "cpu":
+    elif runtarget.lower() == "cpu".lower():
         partition = "#SBATCH --partition=SHM-s-96h"
         timelimit = "#SBATCH --time=4-00:00:00"
 
