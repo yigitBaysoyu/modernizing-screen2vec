@@ -437,7 +437,14 @@ def load_embeddings(embeddings_dir="embeddings", data_dir=None, load_data=True):
     else:
         search_dirs = [data_dir]
 
-    npz_paths = sorted(glob.glob(os.path.join(embeddings_dir, "*.npz")))
+    def numerical_sort_key(path):
+        name = os.path.splitext(os.path.basename(path))[0]
+        try:
+            return int(name)
+        except ValueError:
+            return name
+
+    npz_paths = sorted(glob.glob(os.path.join(embeddings_dir, "*.npz")), key=numerical_sort_key)
 
     from tqdm import tqdm
     is_main_process = os.environ.get("LOCAL_RANK", "0") == "0"

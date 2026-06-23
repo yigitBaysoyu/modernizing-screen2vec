@@ -21,6 +21,7 @@ import orjson
 import argparse
 import difflib
 import numpy as np
+import time
 
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import PeftModel
@@ -185,6 +186,7 @@ def main():
 
     args = parser.parse_args()
     cfg = AdapterConfig()
+    start_time = time.time()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[*] Initializing on {device}...")
@@ -356,6 +358,7 @@ def main():
         f"Average Bounds IoU       : {metrics['avg_iou']:.4f} "
         f"(1.0 = perfect)"
     )
+    print(f"Execution Time           : {time.time() - start_time:.2f} seconds")
     print("=" * 50)
 
 
