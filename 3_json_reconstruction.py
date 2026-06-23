@@ -197,11 +197,11 @@ def main():
         print(f"[-] Error: Embeddings directory not found at {embeddings_dir}")
         return
 
-    print(f"[*] Scanning and loading embeddings from: {embeddings_dir}")
+    print(f"[*] Scanning embeddings directory: {embeddings_dir}")
     try:
-        df = load_embeddings(embeddings_dir=embeddings_dir, data_dir=args.data_dir)
+        df = load_embeddings(embeddings_dir=embeddings_dir, data_dir=args.data_dir, load_data=False)
     except Exception as e:
-        print(f"[-] Error loading embeddings: {e}")
+        print(f"[-] Error loading embeddings metadata: {e}")
         return
 
     if df.empty:
@@ -217,7 +217,16 @@ def main():
 
     row = df.iloc[args.index]
     json_path = row["json-path"]
-    raw_embedding = row["embedding"]
+    
+    # Load only the single requested embedding from disk
+    embedding_path = row["embedding_path"]
+    print(f"[*] Loading single embedding at index {args.index} from: {embedding_path}")
+    try:
+        with np.load(embedding_path) as f_data:
+            raw_embedding = f_data["embedding"].astype(np.float32)
+    except Exception as e:
+        print(f"[-] Error loading single embedding file: {e}")
+        return
 
     # -------------------------------------------------------------------------
     # 2. Load models

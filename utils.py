@@ -419,7 +419,7 @@ def _decode_json_tokens(token_list, config):
     return json.dumps(mock_tree, indent=2)
 
 
-def load_embeddings(embeddings_dir="embeddings", data_dir=None):
+def load_embeddings(embeddings_dir="embeddings", data_dir=None, load_data=True):
     """
     Finds all .npz files in embeddings_dir, locates their matching raw Rico .json
     files, and loads them into a pandas DataFrame.
@@ -476,17 +476,18 @@ def load_embeddings(embeddings_dir="embeddings", data_dir=None):
 
     df = pd.DataFrame(records)
 
-    embeddings = []
-    for path in tqdm(
-        df["embedding_path"],
-        desc="Loading embeddings",
-        disable=not is_main_process
-    ):
-        with np.load(path) as f_data:
-            embeddings.append(f_data["embedding"].astype(np.float32))
+    if load_data:
+        embeddings = []
+        for path in tqdm(
+            df["embedding_path"],
+            desc="Loading embeddings",
+            disable=not is_main_process
+        ):
+            with np.load(path) as f_data:
+                embeddings.append(f_data["embedding"].astype(np.float32))
 
-    df["embedding"] = embeddings
-    df = df.drop(columns=["embedding_path"])
+        df["embedding"] = embeddings
+        df = df.drop(columns=["embedding_path"])
 
     if is_main_process:
         print(f"Successfully loaded {len(df)} embeddings.")
