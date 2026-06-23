@@ -70,11 +70,12 @@ def main():
 
     # Check if this is an adapter training job (meaning adapter_model_out exists)
     if os.path.isdir("adapter_model_out"):
-        print("Detected adapter_model_out directory. Preparing split bzip2 archive...")
-        archive_name = "../archive.zip"
+        folder_name = os.path.basename(current_directory)
+        print(f"Detected adapter_model_out directory in {folder_name}. Preparing split bzip2 archive...")
+        archive_name = "../model.zip"
         
         # Clean up any existing archives first
-        for f in glob.glob("archive.z*") + ["archive.zip"]:
+        for f in glob.glob("model.z*") + ["model.zip"]:
             if os.path.exists(f):
                 try:
                     os.remove(f)
@@ -83,18 +84,18 @@ def main():
 
         try:
             # Create split zip archive inside adapter_model_out with highest bzip2 compression, saving to parent directory
-            cmd = ["zip", "-s", "50m", "-r", "-9", "-Z", "bzip2", archive_name, "."]
+            cmd = ["zip", "-s", "25m", "-r", "-9", "-Z", "bzip2", archive_name, "."]
             print(f"Running command: {' '.join(cmd)}")
             subprocess.run(cmd, cwd="adapter_model_out", check=True)
         except Exception as e:
             print(f"Error creating split bzip2 archive: {e}", file=sys.stderr)
 
         # Find all generated chunks in current directory
-        splits = glob.glob("archive.z[0-9]*")
+        splits = glob.glob("model.z[0-9]*")
         splits.sort()
         all_chunks = splits
-        if os.path.exists("archive.zip"):
-            all_chunks.append("archive.zip")
+        if os.path.exists("model.zip"):
+            all_chunks.append("model.zip")
 
         if not all_chunks:
             print("No split archive chunks found to send.", file=sys.stderr)
@@ -104,7 +105,7 @@ def main():
         print(f"Sending {total_chunks} chunks as individual emails...")
         for idx, chunk in enumerate(all_chunks):
             part_num = idx + 1
-            subject_part = f"{subject} - Part {part_num}/{total_chunks}"
+            subject_part = f"{subject} ({folder_name}) - Part {part_num}/{total_chunks}"
             
             # Attach txt_files (logs) only to the first chunk email to avoid duplicating large logs in every email
             if part_num == 1:
