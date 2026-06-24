@@ -11,7 +11,7 @@ from pathlib import Path
 # ==============================================================================
 
 # How many jobs out of the JOBS array each SLURM array task works on
-JOBS_PER_BATCH = 10000
+JOBS_PER_BATCH = 8000
 
 # ==============================================================================
 # 2) HPC SETTINGS
@@ -19,7 +19,7 @@ JOBS_PER_BATCH = 10000
 SCRATCH_ROOT = "/lustre/scratch/sgjolieb-screen2vec" if not platform.system() == "Windows" else "C:\\Users\\Jonathan\\Dev"
 PROJECT_NAME = "s2v"
 DATA_DIR_NAME = "rico-data"
-runtarget = "gpu-big"  # or "gpu-small" / "cpu"
+runtarget = "GPU-H200"  # or "gpu-small" / "cpu"
 run_exclusive = False  # or True if you want the entire node
 NUM_GPU: int = 1  # 1..4; how many GPUs to reserve per job
 NOW = datetime.now()
@@ -69,15 +69,19 @@ def get_hpc_slurm_directives(jobname: str, num_tasks: int):
     partition = ""
     timelimit = "#SBATCH --time=0-24:00:00"
 
-    if runtarget == "gpu-small":
+    if runtarget.lower() == "gpu-small".lower():
         gres = f"#SBATCH --gres=gpu:{NUM_GPU}"
         partition = "#SBATCH --partition=GPU-small"
         timelimit = "#SBATCH --time=2-00:00:00"
-    elif runtarget == "gpu-big":
+    elif runtarget.lower() == "gpu-big".lower():
         gres = f"#SBATCH --gres=gpu:{NUM_GPU}"
         partition = "#SBATCH --partition=GPU-big"
         timelimit = "#SBATCH --time=2-00:00:00"
-    elif runtarget == "cpu":
+    elif runtarget.lower() == "gpu-H200".lower():
+        gres = f"#SBATCH --gres=gpu:{NUM_GPU}"
+        partition = "#SBATCH --partition=GPU-H200"
+        timelimit = "#SBATCH --time=2-00:00:00"
+    elif runtarget.lower() == "cpu".lower():
         partition = "#SBATCH --partition=SHM-s-96h"
         timelimit = "#SBATCH --time=4-00:00:00"
 

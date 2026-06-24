@@ -36,14 +36,14 @@ class AdapterConfig:
     # Projector: maps Qwen embedding -> virtual prefix tokens for the LM
     num_prefix_tokens = 128
 
-    # Small LM for generation (auto-downloaded from HuggingFace on first run)
-    lm_model_id = "Qwen/Qwen2.5-1.5B"
+    # RECOMMENDED: Qwen3.5-4B-Instruct for complex structural layouts (or Qwen3.5-2B-Instruct)
+    lm_model_id = "Qwen/Qwen3.5-4B-Instruct"
 
-    # LoRA fine-tuning parameters
+    # LoRA fine-tuning parameters updated for newer Qwen structural compliance
     lora_r = 16
     lora_alpha = 32
     lora_dropout = 0.05
-    lora_target_modules = ["q_proj", "v_proj", "k_proj", "o_proj"]
+    lora_target_modules = ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
 
     # Training hyperparameters
     lr_projector = 1e-4       # Learning rate for the MLP projector
