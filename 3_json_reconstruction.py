@@ -12,6 +12,7 @@
 #   - Index of the embedding to reconstruct
 
 import os
+import sys
 import json
 import importlib
 import torch
@@ -183,37 +184,46 @@ def main():
         "--max_tokens", type=int, default=1024,
         help="Maximum tokens to generate",
     )
+    parser.add_argument(
+        "--full-output", action="store_true",
+        help="Print only the reconstructed JSON string, suppressing metrics and logs",
+    )
 
     args = parser.parse_args()
+    
+    def log_info(msg):
+        if not args.full_output:
+            print(msg)
     cfg = AdapterConfig()
     start_time = time.time()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"[*] Initializing on {device}...")
+    log_info(f"[*] Initializing on {device}...")
 
     # -------------------------------------------------------------------------
     # 1. Load embeddings
     # -------------------------------------------------------------------------
     embeddings_dir = args.embeddings_dir
     if not os.path.exists(embeddings_dir):
-        print(f"[-] Error: Embeddings directory not found at {embeddings_dir}")
+        print(f"[-] Error: Embeddings directory not found at {embeddings_dir}", file=sys.stderr)
         return
 
-    print(f"[*] Scanning embeddings directory: {embeddings_dir}")
+    log_info(f"[*] Scanning embeddings directory: {embeddings_dir}")
     try:
         df = load_embeddings(embeddings_dir=embeddings_dir, data_dir=args.data_dir, load_data=False)
     except Exception as e:
-        print(f"[-] Error loading embeddings metadata: {e}")
+        print(f"[-] Error loading embeddings metadata: {e}", file=sys.stderr)
         return
 
     if df.empty:
-        print("[-] Error: No matching embeddings loaded.")
+        print("[-] Error: No matching embeddings loaded.", file=sys.stderr)
         return
 
     if args.index >= len(df) or args.index < 0:
         print(
             f"[-] Error: Index {args.index} is out of bounds "
-            f"for dataset of size {len(df)}."
+            f"for dataset of size {len(df)}.",
+            file=sys.stderr
         )
         return
 
@@ -222,18 +232,18 @@ def main():
     
     # Load only the single requested embedding from disk
     embedding_path = row["embedding_path"]
-    print(f"[*] Loading single embedding at index {args.index} from: {embedding_path}")
+    log_info(f"[*] Loading single embedding at index {args.index} from: {embedding_path}")
     try:
         with np.load(embedding_path) as f_data:
             raw_embedding = f_data["embedding"].astype(np.float32)
     except Exception as e:
-        print(f"[-] Error loading single embedding file: {e}")
+        print(f"[-] Error loading single embedding file: {e}", file=sys.stderr)
         return
 
     # -------------------------------------------------------------------------
     # 2. Load models
     # -------------------------------------------------------------------------
-    print(f"[*] Loading base language model: {cfg.lm_model_id}")
+    log_info(f"[*] Loading base language model: {cfg.lm_model_id}")
     tokenizer = AutoTokenizer.from_pretrained(cfg.lm_model_id)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -244,13 +254,13 @@ def main():
         torch_dtype=model_dtype,
     )
 
-    print(f"[*] Loading LoRA adapter from: {args.lora_model}")
+    log_info(f"[*] Loading LoRA adapter from: {args.lora_model}")
     lm_model = PeftModel.from_pretrained(base_model, args.lora_model)
     lm_model.to(device)
     lm_model.eval()
 
     lm_hidden_dim = lm_model.config.hidden_size
-    print(f"[*] Loading projector from: {args.projector_model}")
+    log_info(f"[*] Loading projector from: {args.projector_model}")
     # Ensure projector parameters match the loaded model's precision
     model_dtype = next(base_model.parameters()).dtype
     projector = EmbeddingProjector(
@@ -265,7 +275,7 @@ def main():
     # -------------------------------------------------------------------------
     # 3. Generate from embedding
     # -------------------------------------------------------------------------
-    print(f"[*] Processing item at index {args.index} (Path: {json_path})")
+    log_info(f"[*] Processing item at index {args.index} (Path: {json_path})")
 
     latent_vec = (
         torch.tensor(raw_embedding, dtype=model_dtype)
@@ -283,6 +293,14 @@ def main():
         pred_json_str = tokenizer.decode(
             generated_ids[0], skip_special_tokens=True
         )
+
+    if args.full_output:
+        try:
+            pred_pretty = json.dumps(json.loads(pred_json_str), indent=2)
+            print(pred_pretty)
+        except (json.JSONDecodeError, TypeError):
+            print(pred_json_str)
+        return
 
     # -------------------------------------------------------------------------
     # 4. Load ground truth (cleaned JSON from the same pipeline used for training)
