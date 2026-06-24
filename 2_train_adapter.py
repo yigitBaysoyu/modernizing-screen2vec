@@ -60,18 +60,23 @@ class AdapterConfig:
 class EmbeddingProjector(nn.Module):
     """
     Projects a single Qwen3-VL embedding vector into a sequence of
-    virtual prefix tokens in the language model's embedding space.
+    *unique* virtual prefix tokens in the language model's embedding space.
 
     This is the core "adapter" component, analogous to LLaVA's visual
     projection layer.  It translates the embedding model's representation
     into a conditioning signal that the language model can attend to.
 
+    The 4096-dim embedding is reshaped into `num_prefix_tokens` chunks
+    (e.g. 128 × 32), so each prefix token receives a *different* slice
+    of the original representation.  A learned positional embedding is
+    added per token to further differentiate them.
+
     Example:
-        projector = EmbeddingProjector(qwen_dim=4096, lm_hidden_dim=896, num_prefix_tokens=8)
+        projector = EmbeddingProjector(qwen_dim=4096, lm_hidden_dim=896, num_prefix_tokens=128)
 
         qwen_embedding = torch.randn(1, 4096)        # one pre-computed Qwen3-VL embedding
-        prefix = projector(qwen_embedding)            # -> [1, 8, 896]
-        # These 8 virtual tokens are prepended to the LM's input sequence.
+        prefix = projector(qwen_embedding)            # -> [1, 128, 896]
+        # These 128 virtual tokens are prepended to the LM's input sequence.
         # The LM then generates the cleaned JSON conditioned on them.
 
     Input:  [B, 4096]  (Qwen3-VL embedding)
@@ -83,25 +88,34 @@ class EmbeddingProjector(nn.Module):
         self.num_prefix_tokens = num_prefix_tokens
         self.lm_hidden_dim = lm_hidden_dim
 
+        assert qwen_dim % num_prefix_tokens == 0, (
+            f"qwen_dim ({qwen_dim}) must be divisible by "
+            f"num_prefix_tokens ({num_prefix_tokens})"
+        )
+        chunk_dim = qwen_dim // num_prefix_tokens  # e.g. 4096 / 128 = 32
+
         self.projector = nn.Sequential(
-            nn.Linear(qwen_dim, lm_hidden_dim * 2),
+            nn.Linear(chunk_dim, lm_hidden_dim * 2),
             nn.GELU(),
             nn.Linear(lm_hidden_dim * 2, lm_hidden_dim),
         )
+        self.prefix_pos = nn.Embedding(num_prefix_tokens, lm_hidden_dim)
 
     def forward(self, qwen_embedding):
         """
         Args:
-            qwen_embedding: [B, num_prefix_tokens, qwen_dim] or legacy [B, qwen_dim] pre-computed Qwen3-VL embeddings.
+            qwen_embedding: [B, qwen_dim] pre-computed Qwen3-VL embeddings.
         Returns:
             [B, num_prefix_tokens, lm_hidden_dim] virtual prefix token embeddings.
         """
+        B = qwen_embedding.size(0)
         if qwen_embedding.dim() == 2:
-            # Legacy 1D embedding: [B, qwen_dim] -> [B, num_prefix_tokens, qwen_dim]
-            qwen_embedding = qwen_embedding.unsqueeze(1).expand(-1, self.num_prefix_tokens, -1)
+            # Reshape [B, 4096] -> [B, 128, 32]: each token gets a unique slice
+            qwen_embedding = qwen_embedding.view(B, self.num_prefix_tokens, -1)
 
-        projected = self.projector(qwen_embedding)
-        return projected
+        projected = self.projector(qwen_embedding)  # [B, 128, lm_hidden_dim]
+        positions = torch.arange(self.num_prefix_tokens, device=projected.device)
+        return projected + self.prefix_pos(positions)
 
 
 # =============================================================================
