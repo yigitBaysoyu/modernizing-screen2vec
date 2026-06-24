@@ -83,6 +83,33 @@ def main():
     c = tf.matmul(a, b)
     print("TF matmul result:", c)
 
+    # Run PyTorch GPU info
+    try:
+        import torch
+        print(f"\nPyTorch Version: {torch.__version__}")
+        cuda_is_available = torch.cuda.is_available()
+        print(f"PyTorch CUDA Available: {cuda_is_available}")
+        
+        if cuda_is_available:
+            device_count = torch.cuda.device_count()
+            print(f"Number of PyTorch CUDA GPUs: {device_count}")
+            print(f"Active CUDA Device ID: {torch.cuda.current_device()}")
+            for i in range(device_count):
+                print(f"PyTorch CUDA Device {i}: {torch.cuda.get_device_name(i)}")
+                print(f"\tCapability: {torch.cuda.get_device_capability(i)}")
+                mem_total = torch.cuda.get_device_properties(i).total_memory / (1024 ** 2)
+                print(f"\tTotal Memory: {mem_total:.2f} MB")
+            
+            # Simple PyTorch tensor calculation on GPU
+            a_pt = torch.tensor([[1.0, 2.0], [3.0, 4.0]], device="cuda")
+            b_pt = torch.tensor([[1.0, 1.0], [0.0, 1.0]], device="cuda")
+            c_pt = torch.matmul(a_pt, b_pt)
+            print("PyTorch matmul result on CUDA:", c_pt)
+        else:
+            print("No PyTorch CUDA devices found (torch.cuda.is_available() returned False).")
+    except ImportError:
+        print("\nPyTorch is not installed in the environment.")
+
 
 if __name__ == "__main__":
     print()

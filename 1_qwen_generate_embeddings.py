@@ -124,6 +124,7 @@ if __name__ == "__main__":
         tasks = [(g, g.replace(".json", ".jpg")) for g in json_files]
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
 
     print("Loaded files (showing first 10):", [t[0] for t in tasks[:10]])
     
