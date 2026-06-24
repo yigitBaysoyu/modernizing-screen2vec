@@ -119,7 +119,7 @@ if __name__ == "__main__":
                 image_path = json_path.replace(".json", ".jpg")
             tasks.append((json_path, image_path))
     else:
-        json_files = glob("../rico-data/data/combined/*json", recursive=True)
+        json_files = glob("../rico-data/data/layouts/*json", recursive=True)
         json_files = sorted(json_files)
         tasks = [(g, g.replace(".json", ".jpg")) for g in json_files]
 

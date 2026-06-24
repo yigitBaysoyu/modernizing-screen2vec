@@ -431,7 +431,7 @@ def load_embeddings(embeddings_dir="embeddings", data_dir=None, load_data=True):
 
     if data_dir is None:
         # Check standard default paths
-        search_dirs = ["../rico-data/data/combined", "data/rico-examples", "rico/examples"]
+        search_dirs = ["../rico-data/data/layouts", "data/rico-examples", "rico/examples"]
     elif isinstance(data_dir, (list, tuple)):
         search_dirs = list(data_dir)
     else:

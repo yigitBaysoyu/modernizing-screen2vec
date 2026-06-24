@@ -43,7 +43,7 @@ def create_batches():
     # holds return values
     jobs = []
 
-    for idx, g in enumerate(sorted(glob(f"{SCRATCH_ROOT}/{DATA_DIR_NAME}/data/combined/*json"))):
+    for idx, g in enumerate(sorted(glob(f"{SCRATCH_ROOT}/{DATA_DIR_NAME}/data/layouts/*json"))):
         jobs.append({
             "task": "embed",
             "json": g,

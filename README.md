@@ -43,7 +43,7 @@ python 3_json_reconstruction.py \
   --lora_model adapter_model_out/lora_adapter_<timestamp> \
   --index <index> \
   [--embeddings_dir embeddings] \
-  [--data_dir <path_to_rico_combined>] \
+  [--data_dir <path_to_rico_layouts>] \
   [--max_tokens 1024]
 ```
 

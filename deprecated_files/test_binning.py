@@ -55,7 +55,7 @@ def get_max_coordinates(filepath):
 
 def main():
     parser = argparse.ArgumentParser(description="Analyze RICO dataset screen sizes for Binning.")
-    parser.add_argument("--dir", type=str, default="../rico-data/data/combined/",
+    parser.add_argument("--dir", type=str, default="../rico-data/data/layouts/",
                         help="Path to the directory containing RICO JSON files.")
     args = parser.parse_args()
 
