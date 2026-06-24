@@ -13,3 +13,4 @@ orjson
 matplotlib
 peft
 accelerate
+scikit-learn
