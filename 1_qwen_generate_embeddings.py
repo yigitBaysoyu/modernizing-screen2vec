@@ -108,25 +108,29 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         with open(sys.argv[1], 'r', encoding='utf-8') as f:
             job_data = json.load(f)
-        to_glob = [item["json"] for item in job_data]
+        # Parse job list; handle both list of dicts and list of strings
+        tasks = []
+        for item in job_data:
+            if isinstance(item, dict):
+                json_path = item["json"]
+                image_path = item.get("image") or json_path.replace(".json", ".jpg")
+            else:
+                json_path = item
+                image_path = json_path.replace(".json", ".jpg")
+            tasks.append((json_path, image_path))
     else:
-        to_glob = glob("rico/examples/*.json")
-        to_glob = glob("../rico-data/data/combined/*json", recursive=True)
-        to_glob = sorted(to_glob)
+        json_files = glob("../rico-data/data/combined/*json", recursive=True)
+        json_files = sorted(json_files)
+        tasks = [(g, g.replace(".json", ".jpg")) for g in json_files]
 
-    from accelerate import Accelerator
-    accelerator = Accelerator()
-    device = accelerator.device
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    if accelerator.is_local_main_process:
-        print("Loaded files (showing first 10):", to_glob[:10])
-    assert len(to_glob) > 1
+    print("Loaded files (showing first 10):", [t[0] for t in tasks[:10]])
+    
+    # Verify we have tasks to run
+    assert len(tasks) >= 1
 
-    # Shard the dataset across processes
-    to_glob = to_glob[accelerator.process_index::accelerator.num_processes]
-
-    if accelerator.is_local_main_process:
-        print("Loading model and processor... (This may take a while and requires ~16GB of VRAM/RAM for 8B)")
+    print("Loading model and processor... (This may take a while and requires ~16GB of VRAM/RAM for 8B)")
 
     model_id = "../rico-data/models/Qwen3-VL-Embedding-8B"
     # model_id = "./models/Qwen3-VL-Embedding-8B"
@@ -147,18 +151,15 @@ if __name__ == "__main__":
         processor = AutoProcessor.from_pretrained(model_id)
     except Exception as e:
         print(f"\nFailed to load model from local path: {e}")
-        print("Tip: Ensure the model data is not corrupted and accelerate is installed.")
+        print("Tip: Ensure the model data is not corrupted.")
         sys.exit(1)
 
     # Only update tqdm on 1% step
-    step_size = len(to_glob) // 100 or 1
-    pbar = tqdm(to_glob, miniters=step_size, disable=not accelerator.is_local_main_process)
-    for i, g in enumerate(pbar):
+    step_size = len(tasks) // 100 or 1
+    pbar = tqdm(tasks, miniters=step_size)
+    for i, (json_path, image_path) in enumerate(pbar):
         if i % step_size == 0:
-            pbar.set_description(f"Processing: {g}")
-
-        json_path = g
-        image_path = g.replace(".json", ".jpg")
+            pbar.set_description(f"Processing: {json_path}")
 
         try:
             embedding = main(json_path, image_path, model, processor)
@@ -167,19 +168,14 @@ if __name__ == "__main__":
             continue
 
         if embedding is not None:
-            save_embedding_npz(g, embedding)
+            save_embedding_npz(json_path, embedding)
             successful_embeddings_count += 1
 
-    # Wait for all processes to finish before printing summary
-    accelerator.wait_for_everyone()
+    end_time = time.time()
+    elapsed_seconds = int(end_time - start_time)
+    hours, remainder = divmod(elapsed_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
 
-    if accelerator.is_local_main_process:
-        end_time = time.time()
-        elapsed_seconds = int(end_time - start_time)
-        hours, remainder = divmod(elapsed_seconds, 3600)
-        minutes, seconds = divmod(remainder, 60)
-
-        print(f"\n--- Execution Summary ---")
-        print(f"Total time elapsed: {hours} hours, {minutes} minutes, {seconds} seconds")
-        # Note: count is per process, so this is just for the main process shard
-        print(f"Embeddings performed on main process: {successful_embeddings_count}")
+    print(f"\n--- Execution Summary ---")
+    print(f"Total time elapsed: {hours} hours, {minutes} minutes, {seconds} seconds")
+    print(f"Embeddings performed: {successful_embeddings_count}")
