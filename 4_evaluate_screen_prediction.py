@@ -21,6 +21,7 @@ import time
 from pathlib import Path
 
 import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
 from tqdm import tqdm
 
 
@@ -212,8 +213,7 @@ def evaluate_screen_prediction(
         pred_normed = pred / np.maximum(pred_norm, 1e-12)           # (T, D)
 
         # Cosine similarity against ALL screen embeddings
-        # (T, D) @ (D, N) -> (T, N)
-        similarities = pred_normed @ embedding_matrix_normed.T
+        similarities = cosine_similarity(pred_normed, embedding_matrix_normed)
 
         # Rank of target similarity: count screens with similarity >= target's similarity
         target_sims = similarities[np.arange(T), trace_indices]     # (T,)
