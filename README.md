@@ -57,10 +57,9 @@ python 3_json_reconstruction.py \
 
 ### Example:
 ```bash
-python 3_json_reconstruction.py \
-  --projector_model adapter_model_out/projector_20260616_183644.pth \
-  --lora_model adapter_model_out/lora_adapter_20260616_183644 \
-  --index 2
+python 3_json_reconstruction.py --projector_model adapter_model_out/best_projector.pth --lora_model adapter_model_out/best_lora_adapter/ --index 3
 ```
 
 (use `--index 2` because the early indexes are progressive web apps only having a webview.)
+
+Indexes are always the respective element in the dataset, e.g., index 1 equals toembeddings/ 1.npz. 

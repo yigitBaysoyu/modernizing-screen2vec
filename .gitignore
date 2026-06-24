@@ -11,3 +11,6 @@ __pycache__/*
 embeddings.csv
 *.png
 /adapter_model_out
+
+embeddings/
+embeddings*/

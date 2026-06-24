@@ -85,11 +85,11 @@ def main(json_path, image_path, model, processor):
         # Extract the hidden states from the last layer for all tokens
         last_hidden_states = outputs.hidden_states[-1] # Shape: [1, seq_len, 4096]
 
-        # Use adaptive average pooling to pool the sequence dimension down to exactly 128 tokens
+        # Use adaptive average pooling to pool the sequence dimension down to exactly 1 token (shape: [1, 1, 4096])
         # We must permute to [batch, channels, seq_len] for 1d pooling, then permute back.
-        pooled = torch.nn.functional.adaptive_avg_pool1d(last_hidden_states.permute(0, 2, 1), 128).permute(0, 2, 1)
+        pooled = torch.nn.functional.adaptive_avg_pool1d(last_hidden_states.permute(0, 2, 1), 1).permute(0, 2, 1)
 
-        embedding = pooled.squeeze(0).cpu().float().numpy() # Shape: [128, 4096]
+        embedding = pooled.squeeze(0).squeeze(0).cpu().float().numpy() # Shape: [4096]
 
     # Explicitly free VRAM to prevent memory leaks in the loop
     del inputs

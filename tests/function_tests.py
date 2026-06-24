@@ -62,7 +62,7 @@ class TestLoadEmbeddings(unittest.TestCase):
         os.makedirs(self.test_embeddings_dir, exist_ok=True)
         
         # We will create a test embedding for Rico example '0.json'
-        self.test_embedding = np.random.randn(128, 4096).astype(np.float16)
+        self.test_embedding = np.random.randn(4096).astype(np.float16)
         np.savez_compressed(
             os.path.join(self.test_embeddings_dir, "0.npz"),
             embedding=self.test_embedding
