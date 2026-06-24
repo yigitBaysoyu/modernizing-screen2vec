@@ -203,9 +203,11 @@ def main():
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
+    # Load model with bfloat16 if GPU is available to save memory and match native training precision
+    model_dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
     lm_model = AutoModelForCausalLM.from_pretrained(
         cfg.lm_model_id,
-        torch_dtype=torch.float32,
+        torch_dtype=model_dtype,
     )
 
     # -------------------------------------------------------------------------
@@ -225,10 +227,15 @@ def main():
     # -------------------------------------------------------------------------
     # 4. Create projector
     # -------------------------------------------------------------------------
+    # Ensure all components use the model's actual loaded precision
+    model_dtype = next(lm_model.parameters()).dtype
+    if accelerator.is_local_main_process:
+        print(f"Model loaded with dtype: {model_dtype}")
+
     lm_hidden_dim = lm_model.config.hidden_size
     projector = EmbeddingProjector(
         cfg.qwen_embed_dim, lm_hidden_dim, cfg.num_prefix_tokens
-    )
+    ).to(model_dtype)
 
     proj_params = sum(p.numel() for p in projector.parameters())
     if accelerator.is_local_main_process:
@@ -299,7 +306,7 @@ def main():
 
             # Project Qwen embedding -> prefix tokens
             emb = torch.tensor(
-                row["embedding"], dtype=torch.float32
+                row["embedding"], dtype=model_dtype
             ).unsqueeze(0).to(device)
             emb = F.normalize(emb, p=2, dim=-1)
             prefix_embeds = projector(emb)  # [1, N, D]
@@ -396,7 +403,7 @@ def main():
                 input_ids = target_enc.input_ids
 
                 emb = torch.tensor(
-                    row["embedding"], dtype=torch.float32
+                    row["embedding"], dtype=model_dtype
                 ).unsqueeze(0).to(device)
                 emb = F.normalize(emb, p=2, dim=-1)
                 prefix_embeds = projector(emb)
@@ -537,7 +544,7 @@ def main():
             last_row = val_embeddings.iloc[-1]
 
             emb = torch.tensor(
-                last_row["embedding"], dtype=torch.float32
+                last_row["embedding"], dtype=model_dtype
             ).unsqueeze(0).to(device)
             emb = F.normalize(emb, p=2, dim=-1)
             prefix_embeds = unwrapped_projector(emb)

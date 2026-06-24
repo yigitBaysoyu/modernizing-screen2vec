@@ -238,9 +238,10 @@ def main():
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
+    model_dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
     base_model = AutoModelForCausalLM.from_pretrained(
         cfg.lm_model_id,
-        torch_dtype=torch.float32,
+        torch_dtype=model_dtype,
     )
 
     print(f"[*] Loading LoRA adapter from: {args.lora_model}")
@@ -250,12 +251,15 @@ def main():
 
     lm_hidden_dim = lm_model.config.hidden_size
     print(f"[*] Loading projector from: {args.projector_model}")
+    # Ensure projector parameters match the loaded model's precision
+    model_dtype = next(base_model.parameters()).dtype
     projector = EmbeddingProjector(
         cfg.qwen_embed_dim, lm_hidden_dim, cfg.num_prefix_tokens
     ).to(device)
     projector.load_state_dict(
         torch.load(args.projector_model, map_location=device)
     )
+    projector = projector.to(model_dtype)
     projector.eval()
 
     # -------------------------------------------------------------------------
@@ -264,7 +268,7 @@ def main():
     print(f"[*] Processing item at index {args.index} (Path: {json_path})")
 
     latent_vec = (
-        torch.tensor(raw_embedding, dtype=torch.float32)
+        torch.tensor(raw_embedding, dtype=model_dtype)
         .unsqueeze(0)
         .to(device)
     )
