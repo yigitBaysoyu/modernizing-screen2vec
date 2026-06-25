@@ -198,17 +198,21 @@ def main():
     # -------------------------------------------------------------------------
     # 2. Load small LM + tokenizer
     # -------------------------------------------------------------------------
-    print(f"Loading language model: {cfg.lm_model_id} ...")
-    tokenizer = AutoTokenizer.from_pretrained(cfg.lm_model_id)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
     # Load model with bfloat16 if GPU is available to save memory and match native training precision
     model_dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
-    lm_model = AutoModelForCausalLM.from_pretrained(
-        cfg.lm_model_id,
-        torch_dtype=model_dtype,
-    )
+
+    if accelerator.is_local_main_process:
+        print(f"Loading language model: {cfg.lm_model_id} ...")
+
+    with accelerator.main_process_first():
+        tokenizer = AutoTokenizer.from_pretrained(cfg.lm_model_id)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+
+        lm_model = AutoModelForCausalLM.from_pretrained(
+            cfg.lm_model_id,
+            torch_dtype=model_dtype,
+        )
 
     # -------------------------------------------------------------------------
     # 3. Apply LoRA
