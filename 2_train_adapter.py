@@ -201,10 +201,27 @@ def main():
     # Load model with bfloat16 if GPU is available to save memory and match native training precision
     model_dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
 
-    if accelerator.is_local_main_process:
-        print(f"Loading language model: {cfg.lm_model_id} ...")
-
     with accelerator.main_process_first():
+        if accelerator.is_local_main_process:
+            import shutil
+            from pathlib import Path
+            model_id = cfg.lm_model_id
+            try:
+                print(f"Verifying cache for {model_id}...")
+                AutoTokenizer.from_pretrained(model_id)
+                AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=model_dtype)
+                print(f"Cache for {model_id} is valid.")
+            except Exception as e:
+                print(f"Failed to load {model_id} due to possible cache corruption: {e}")
+                cache_dir = Path.home() / ".cache" / "huggingface" / "hub" / f"models--{model_id.replace('/', '--')}"
+                if cache_dir.exists():
+                    print(f"Deleting corrupted cache directory: {cache_dir}")
+                    shutil.rmtree(cache_dir, ignore_errors=True)
+                print("Retrying clean download...")
+                AutoTokenizer.from_pretrained(model_id, force_download=True)
+                AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=model_dtype, force_download=True)
+                print(f"{model_id} downloaded successfully after cache clean!")
+
         tokenizer = AutoTokenizer.from_pretrained(cfg.lm_model_id)
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token

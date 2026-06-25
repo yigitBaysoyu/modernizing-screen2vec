@@ -63,3 +63,25 @@ python 3_json_reconstruction.py --projector_model adapter_model_out/best_project
 (use `--index 2` because the early indexes are progressive web apps only having a webview.)
 
 Indexes are always the respective element in the dataset, e.g., index 1 equals toembeddings/ 1.npz. 
+
+TODOs
+- Benchmarken Table 3 stechen.
+- Den User-Centric Context-Dependent Flow als Argument bringen, Icons bereitzustellen und Co un Nutzerinteraktionen einfacher zu machen.
+- Eigene Benchmarks für Reconstruction Quality
+- Evtl. Android in the Wild
+
+Parameter:
+- Embeddingspace verkleinern und eine abflachende Kurve zeigen
+- Embedding-Modell verkleinern um weniger Strom zu verbrauchen und performanter zu wreden
+- Rechenzeit und Speicherverbrauch gegen Screen2Vec Approach testen
+- Anzahl Prefixtokens untersuchen
+
+
+
+Title Ideas:
+- Screen2Vec 2.0: Embedding Representations to Support Mobile Downstream Tasks for Mobile Interactions
+-  Supporting Downstream Tasks in Mobile Multitask Interactions
+
+Reviewer:
+- Per Ola Kristensen
+

@@ -114,7 +114,7 @@ def copy_folder(execution_id) -> Path:
         return {f for f in files if f.startswith('.')}
 
     job_folder_name = f"{NOW_STR}_{execution_id}"  # job name
-    current_project_folder = Path.cwd().parent  # assuming running _hpc_start.py from /hpc subfolder
+    current_project_folder = Path(__file__).resolve().parent.parent
     target = Path(SCRATCH_ROOT) / job_folder_name
     print("Copying", current_project_folder, "->", target)
     shutil.copytree(current_project_folder, target, ignore=ignore_folders, symlinks=True)
