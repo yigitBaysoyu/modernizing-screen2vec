@@ -18,11 +18,13 @@ import math
 import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 from tqdm import tqdm
+from joblib import Parallel, delayed
 
 
 # ============================================================================
@@ -68,16 +70,26 @@ def load_all_embeddings(embeddings_dir: str):
             "Run 1_qwen_generate_embeddings.py first."
         )
 
-    print(f"Loading {len(npz_files)} embeddings from '{embeddings_dir}'...")
+    print(f"Loading {len(npz_files)} embeddings from '{embeddings_dir}' in parallel...")
 
-    id_to_idx = {}
-    embeddings = []
-
-    for npz_path in tqdm(npz_files, desc="Loading embeddings"):
+    def load_single(npz_path):
         screen_id = int(npz_path.stem)
         with np.load(npz_path) as f:
             emb = f["embedding"].astype(np.float32)
-        id_to_idx[screen_id] = len(embeddings)
+        return screen_id, emb
+
+    # Load npz files in parallel using ThreadPoolExecutor
+    with ThreadPoolExecutor() as executor:
+        results = list(tqdm(
+            executor.map(load_single, npz_files),
+            total=len(npz_files),
+            desc="Loading embeddings"
+        ))
+
+    id_to_idx = {}
+    embeddings = []
+    for idx, (screen_id, emb) in enumerate(results):
+        id_to_idx[screen_id] = idx
         embeddings.append(emb)
 
     embedding_matrix = np.stack(embeddings, axis=0)  # (N, D)
@@ -153,12 +165,58 @@ def parse_traces(traces_dir: str, available_ids: set):
 # ============================================================================
 # 3. Evaluate Screen Prediction
 # ============================================================================
+def eval_single_trace(
+    trace,
+    id_to_idx,
+    embedding_matrix,
+    embedding_matrix_normed,
+    k_001pct,
+    k_01pct,
+    k_1pct,
+    k_5pct,
+):
+    """Evaluates prediction metrics for a single RICO interaction trace."""
+    trace_indices = [id_to_idx[sid] for sid in trace]
+    trace_normed = embedding_matrix_normed[trace_indices]  # (T, D)
+    trace_raw = embedding_matrix[trace_indices]            # (T, D)
+
+    T = len(trace)
+
+    # RMSE: raw (unnormalized) average of other screens in trace
+    trace_raw_sum = trace_raw.sum(axis=0, keepdims=True)  # (1, D)
+    pred_raw = (trace_raw_sum - trace_raw) / (T - 1)      # (T, D)
+    sq_errs = np.sum((pred_raw - trace_raw) ** 2, axis=1) # (T,)
+    sq_err_sum = float(np.sum(sq_errs))
+
+    # Prediction: mean of normalized other screens, then L2-normalize
+    trace_normed_sum = trace_normed.sum(axis=0, keepdims=True)  # (1, D)
+    pred = (trace_normed_sum - trace_normed) / (T - 1)          # (T, D)
+    pred_norm = np.linalg.norm(pred, axis=1, keepdims=True)     # (T, 1)
+    pred_normed = pred / np.maximum(pred_norm, 1e-12)           # (T, D)
+
+    # Cosine similarity against ALL screen embeddings
+    similarities = cosine_similarity(pred_normed, embedding_matrix_normed)
+
+    # Rank of target similarity: count screens with similarity >= target's similarity
+    target_sims = similarities[np.arange(T), trace_indices]     # (T,)
+    ranks = np.sum(similarities >= target_sims[:, None], axis=1) # (T,)
+
+    hits_top1 = int(np.sum(ranks <= 1))
+    hits_top001pct = int(np.sum(ranks <= k_001pct))
+    hits_top01pct = int(np.sum(ranks <= k_01pct))
+    hits_top1pct = int(np.sum(ranks <= k_1pct))
+    hits_top5pct = int(np.sum(ranks <= k_5pct))
+
+    return T, sq_err_sum, hits_top1, hits_top001pct, hits_top01pct, hits_top1pct, hits_top5pct
+
+
 def evaluate_screen_prediction(
     traces: list,
     id_to_idx: dict,
     embedding_matrix: np.ndarray,
     embedding_matrix_normed: np.ndarray,
     norms: np.ndarray,
+    n_jobs: int = -1,
 ):
     """
     For each screen in each trace, use all other screens in the trace as
@@ -183,6 +241,22 @@ def evaluate_screen_prediction(
     mean_norm = float(np.mean(norms))
     print(f"  Mean embedding L2 norm: {mean_norm:.4f}")
 
+    print(f"  Evaluating traces in parallel (n_jobs={n_jobs})...")
+
+    results = Parallel(n_jobs=n_jobs)(
+        delayed(eval_single_trace)(
+            trace,
+            id_to_idx,
+            embedding_matrix,
+            embedding_matrix_normed,
+            k_001pct,
+            k_01pct,
+            k_1pct,
+            k_5pct,
+        )
+        for trace in tqdm(traces, desc="Evaluating traces")
+    )
+
     # Accumulators
     total_predictions = 0
     hits_top1 = 0
@@ -192,41 +266,15 @@ def evaluate_screen_prediction(
     hits_top5pct = 0
     sum_sq_error = 0.0
 
-    for trace in tqdm(traces, desc="Evaluating traces"):
-        # Pre-fetch the normalized embeddings for this trace
-        trace_indices = [id_to_idx[sid] for sid in trace]
-        trace_normed = embedding_matrix_normed[trace_indices]  # (T, D)
-        trace_raw = embedding_matrix[trace_indices]            # (T, D)
-
-        T = len(trace)
-
-        # RMSE: raw (unnormalized) average of other screens in trace
-        trace_raw_sum = trace_raw.sum(axis=0, keepdims=True)  # (1, D)
-        pred_raw = (trace_raw_sum - trace_raw) / (T - 1)      # (T, D)
-        sq_errs = np.sum((pred_raw - trace_raw) ** 2, axis=1) # (T,)
-        sum_sq_error += float(np.sum(sq_errs))
-
-        # Prediction: mean of normalized other screens, then L2-normalize
-        trace_normed_sum = trace_normed.sum(axis=0, keepdims=True)  # (1, D)
-        pred = (trace_normed_sum - trace_normed) / (T - 1)          # (T, D)
-        pred_norm = np.linalg.norm(pred, axis=1, keepdims=True)     # (T, 1)
-        pred_normed = pred / np.maximum(pred_norm, 1e-12)           # (T, D)
-
-        # Cosine similarity against ALL screen embeddings
-        similarities = cosine_similarity(pred_normed, embedding_matrix_normed)
-
-        # Rank of target similarity: count screens with similarity >= target's similarity
-        target_sims = similarities[np.arange(T), trace_indices]     # (T,)
-        ranks = np.sum(similarities >= target_sims[:, None], axis=1) # (T,)
-
-        # Accumulate top-k hits
-        hits_top1 += int(np.sum(ranks <= 1))
-        hits_top001pct += int(np.sum(ranks <= k_001pct))
-        hits_top01pct += int(np.sum(ranks <= k_01pct))
-        hits_top1pct += int(np.sum(ranks <= k_1pct))
-        hits_top5pct += int(np.sum(ranks <= k_5pct))
-
+    for res in results:
+        T, sq_err_sum, h1, h001, h01, h1pct, h5pct = res
         total_predictions += T
+        sum_sq_error += sq_err_sum
+        hits_top1 += h1
+        hits_top001pct += h001
+        hits_top01pct += h01
+        hits_top1pct += h1pct
+        hits_top5pct += h5pct
 
     # Compute final metrics
     metrics = {
@@ -315,6 +363,10 @@ def main():
         default="../rico-data/data/traces/filtered_traces",
         help="Path to RICO filtered_traces directory",
     )
+    parser.add_argument(
+        "--n_jobs", type=int, default=-1,
+        help="Number of parallel jobs for evaluation (default: -1, use all cores)",
+    )
     args = parser.parse_args()
 
     start = time.time()
@@ -334,7 +386,7 @@ def main():
     # 3. Evaluate
     print("\n[Step 3/3] Running screen prediction evaluation...")
     metrics = evaluate_screen_prediction(
-        traces, id_to_idx, emb_matrix, emb_normed, norms
+        traces, id_to_idx, emb_matrix, emb_normed, norms, n_jobs=args.n_jobs
     )
 
     # 4. Print results
