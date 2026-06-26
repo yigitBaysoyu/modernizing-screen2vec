@@ -44,20 +44,19 @@ from tqdm import tqdm
 class SequenceProjector(nn.Module):
     """
     Projects pre-computed Qwen2-VL embeddings into a lower-dimensional
-    (or same-dimensional) space optimized for sequence prediction.
-
-    Architecture: Linear -> LayerNorm -> GELU -> Linear -> L2-Normalize
+    space optimized for sequence prediction using a Linear mapping.
+    
+    A simpler Linear mapping often generalizes much better than an MLP 
+    for finding a CBOW subspace on already dense, frozen embeddings.
     """
 
-    def __init__(self, input_dim: int = 4096, proj_dim: int = 128,
-                 hidden_dim: int = 1024):
+    def __init__(self, input_dim: int = 4096, proj_dim: int = 128, hidden_dim: int = 1024):
+        # hidden_dim is ignored but kept for compatibility with argparse
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
-            nn.LayerNorm(hidden_dim),
-            nn.GELU(),
-            nn.Linear(hidden_dim, proj_dim),
-        )
+        self.net = nn.Linear(input_dim, proj_dim, bias=False)
+        
+        # Initialize orthogonally to preserve as much variance as possible at start
+        nn.init.orthogonal_(self.net.weight)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -195,13 +194,32 @@ def compute_infonce_loss(
     ).unsqueeze(1)
     context_means = F.normalize(context_sums / ctx_count_tensor, p=2, dim=1)
 
-    # --- Symmetric InfoNCE ---
-    logits = context_means @ target_proj.T / temperature   # (B, B)
+    # --- InfoNCE against ALL screens in the batch (targets + contexts) ---
+    # Logits: each prediction vs ALL elements in combined_proj
+    logits = context_means @ combined_proj.T / temperature   # (B, B + total_ctx)
+    
+    # We want to mask out any negative that is actually the exact same screen 
+    # as the target screen (in case the target screen ID appears multiple times).
+    combined_indices_tensor = torch.tensor(combined_indices, device=device)
+    target_indices_tensor = torch.tensor(target_indices, device=device)
+    
+    # Shape of mask: (B, B + total_ctx). True if it's the exact same screen ID.
+    mask = (target_indices_tensor.unsqueeze(1) == combined_indices_tensor.unsqueeze(0))
+    
+    # Unmask the actual diagonal (where i == j) so that the correct positive is preserved
+    diagonal_mask = torch.eye(B, B + len(all_ctx_indices), device=device, dtype=torch.bool)
+    mask = mask & ~diagonal_mask
+    
+    # Set logits for identical screens to -inf
+    logits.masked_fill_(mask, float('-inf'))
+    
+    # Labels: the correct positive for row i is index i
     labels = torch.arange(B, device=device)
-    loss = (
-        F.cross_entropy(logits, labels)
-        + F.cross_entropy(logits.T, labels)
-    ) / 2.0
+    loss = F.cross_entropy(logits, labels)
+
+    # Symmetric loss for targets
+    target_logits = logits[:, :B]
+    loss = (loss + F.cross_entropy(target_logits.T, labels)) / 2.0
 
     return loss
 
@@ -320,12 +338,7 @@ def main():
         epoch_loss = 0.0
         n_batches = 0
 
-        pbar = tqdm(
-            range(0, len(train_traces), args.batch_size),
-            desc=f"Epoch {epoch+1:3d}/{args.epochs}",
-            leave=False,
-        )
-        for start in pbar:
+        for start in range(0, len(train_traces), args.batch_size):
             batch = train_traces[start : start + args.batch_size]
             if len(batch) < 4:
                 continue
@@ -342,7 +355,6 @@ def main():
 
             epoch_loss += loss.item()
             n_batches += 1
-            pbar.set_postfix(loss=f"{loss.item():.4f}")
 
         avg_train = epoch_loss / max(1, n_batches)
         history["train_loss"].append(avg_train)
