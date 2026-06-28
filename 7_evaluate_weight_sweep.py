@@ -5,9 +5,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from tqdm import tqdm
-import torch
 import math
-from transformers import AutoModel, AutoTokenizer
 from concurrent.futures import ThreadPoolExecutor
 from sklearn.metrics.pairwise import cosine_similarity
 from joblib import Parallel, delayed
@@ -22,52 +20,82 @@ def parse_activity_name(activity_name):
     return pkg, activity.split(".")[-1]
 
 def mean_pooling(model_output, attention_mask):
+    import torch
     token_embeddings = model_output[0]
     input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
     return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
 
 def load_seq_embeddings(embeddings_dir):
     npz_files = sorted(Path(embeddings_dir).glob("*.npz"))
-    print(f"Loading {len(npz_files)} sequence embeddings...")
-    id_to_idx = {}
-    embeddings = []
-    for idx, npz_path in enumerate(npz_files):
+    print(f"Loading {len(npz_files)} sequence embeddings in parallel...")
+
+    def load_single(npz_path):
         screen_id = int(npz_path.stem)
         with np.load(npz_path) as f:
             emb = f["embedding"].astype(np.float32)
+        return screen_id, emb
+
+    with ThreadPoolExecutor() as executor:
+        results = list(tqdm(
+            executor.map(load_single, npz_files),
+            total=len(npz_files),
+            desc="Loading embeddings"
+        ))
+
+    id_to_idx = {}
+    embeddings = []
+    for idx, (screen_id, emb) in enumerate(results):
         id_to_idx[screen_id] = idx
         embeddings.append(emb)
     return id_to_idx, np.stack(embeddings, axis=0)
 
 def parse_traces(traces_dir, available_ids):
     traces_root = Path(traces_dir)
-    traces = []
+    if not traces_root.exists():
+        print(f"Warning: Traces directory '{traces_dir}' does not exist.")
+        return []
+
+    # Collect all candidate trace directories
+    trace_dirs = []
     app_dirs = sorted(traces_root.iterdir())
     for app_dir in app_dirs:
         if not app_dir.is_dir():
             continue
         for trace_dir in sorted(app_dir.iterdir()):
-            if not trace_dir.is_dir() or not trace_dir.name.startswith("trace_"):
-                continue
-            gestures_path = trace_dir / "gestures.json"
-            if not gestures_path.exists():
-                continue
+            if trace_dir.is_dir() and trace_dir.name.startswith("trace_"):
+                trace_dirs.append(trace_dir)
+
+    def parse_single_trace(trace_dir):
+        gestures_path = trace_dir / "gestures.json"
+        if not gestures_path.exists():
+            return None
+        try:
+            with open(gestures_path, "r", encoding="utf-8") as f:
+                gestures = json.load(f)
+        except Exception:
+            return None
+        screen_ids = []
+        for key in gestures.keys():
             try:
-                with open(gestures_path, "r", encoding="utf-8") as f:
-                    gestures = json.load(f)
-            except Exception:
+                sid = int(key)
+            except ValueError:
                 continue
-            screen_ids = []
-            for key in gestures.keys():
-                try:
-                    sid = int(key)
-                except ValueError:
-                    continue
-                if sid in available_ids:
-                    screen_ids.append(sid)
-            if len(screen_ids) < 3:
-                continue
-            traces.append(screen_ids)
+            if sid in available_ids:
+                screen_ids.append(sid)
+        if len(screen_ids) < 3:
+            return None
+        return screen_ids
+
+    # Parse trace files in parallel
+    print(f"Parsing {len(trace_dirs)} traces in parallel...")
+    with ThreadPoolExecutor() as executor:
+        results = list(tqdm(
+            executor.map(parse_single_trace, trace_dirs),
+            total=len(trace_dirs),
+            desc="Parsing traces"
+        ))
+
+    traces = [t for t in results if t is not None]
     return traces
 
 def eval_single_trace(
@@ -115,7 +143,7 @@ def evaluate(traces, id_to_idx, embedding_matrix, n_jobs=-1):
         delayed(eval_single_trace)(
             trace, id_to_idx, embedding_matrix_normed, k_001pct, k_01pct, k_1pct, k_5pct
         )
-        for trace in traces
+        for trace in tqdm(traces, desc="Evaluating traces", leave=False)
     )
 
     total_predictions = 0
@@ -167,24 +195,36 @@ def main():
     screen_to_app = {}
     traces_root = Path(args.traces_dir)
     if traces_root.exists():
+        trace_tasks = []
         app_dirs = sorted(traces_root.iterdir())
         for app_dir in app_dirs:
             if not app_dir.is_dir():
                 continue
             app_pkg = app_dir.name
             for trace_dir in sorted(app_dir.iterdir()):
-                if not trace_dir.is_dir() or not trace_dir.name.startswith("trace_"):
-                    continue
-                gestures_path = trace_dir / "gestures.json"
-                if not gestures_path.exists():
-                    continue
-                try:
-                    with open(gestures_path, "r", encoding="utf-8") as f:
-                        gestures = json.load(f)
-                    for key in gestures.keys():
-                        screen_to_app[int(key)] = app_pkg
-                except Exception:
-                    continue
+                if trace_dir.is_dir() and trace_dir.name.startswith("trace_"):
+                    trace_tasks.append((trace_dir, app_pkg))
+
+        def map_single_trace_to_app(trace_dir, app_pkg):
+            gestures_path = trace_dir / "gestures.json"
+            if not gestures_path.exists():
+                return {}
+            try:
+                with open(gestures_path, "r", encoding="utf-8") as f:
+                    gestures = json.load(f)
+                return {int(key): app_pkg for key in gestures.keys()}
+            except Exception:
+                return {}
+
+        print(f"Mapping {len(trace_tasks)} traces to apps in parallel...")
+        with ThreadPoolExecutor() as executor:
+            results = list(tqdm(
+                executor.map(lambda task: map_single_trace_to_app(*task), trace_tasks),
+                total=len(trace_tasks),
+                desc="Mapping traces to apps"
+            ))
+        for res in results:
+            screen_to_app.update(res)
 
     missing_sids = [sid for sid in available_ids if sid not in screen_to_app]
     if missing_sids:
@@ -203,7 +243,7 @@ def main():
             return sid, None
 
         with ThreadPoolExecutor() as executor:
-            results = list(executor.map(parse_single_layout, missing_sids))
+            results = list(tqdm(executor.map(parse_single_layout, missing_sids), total=len(missing_sids), desc="Parsing missing layouts"))
         for sid, pkg in results:
             if pkg:
                 screen_to_app[sid] = pkg
@@ -240,6 +280,8 @@ def main():
 
     # 5. Generate semantic embeddings
     print("Loading Sentence-BERT model (all-MiniLM-L6-v2)...")
+    import torch
+    from transformers import AutoModel, AutoTokenizer
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     tokenizer = AutoTokenizer.from_pretrained("sentence-transformers/all-MiniLM-L6-v2")
     model = AutoModel.from_pretrained("sentence-transformers/all-MiniLM-L6-v2").to(device)
@@ -248,8 +290,9 @@ def main():
     unique_texts = [app_texts[pkg] for pkg in unique_packages]
     semantic_embs = {}
     batch_size = 128
+    print(f"Generating semantic embeddings for {len(unique_texts)} unique apps...")
     with torch.no_grad():
-        for i in range(0, len(unique_texts), batch_size):
+        for i in tqdm(range(0, len(unique_texts), batch_size), desc="Generating semantic embeddings"):
             batch_texts = unique_texts[i : i + batch_size]
             batch_pkgs = unique_packages[i : i + batch_size]
             encoded = tokenizer(batch_texts, padding=True, truncation=True, return_tensors='pt').to(device)
@@ -282,35 +325,35 @@ def main():
         (1.0, 0.2, 10.0), # screen + very low semantic + ultra high-weight fingerprint
     ]
 
+    # Pre-normalize screen embeddings
+    screen_norms = np.linalg.norm(screen_embs, axis=1, keepdims=True)
+    screen_norms = np.maximum(screen_norms, 1e-12)
+    screen_embs_normed = screen_embs / screen_norms
+
+    # Pre-map and stack semantic/unique embeddings for all screens
+    print("Pre-mapping app semantic and unique embeddings for all screens...")
+    app_list = [screen_to_app[idx_to_id[s_idx]] for s_idx in range(screen_embs.shape[0])]
+    sem_embs_all = np.stack([semantic_embs[app] for app in app_list], axis=0)
+    uniq_embs_all = np.stack([unique_embs[app] for app in app_list], axis=0)
+
     print("\nStarting weight sweeps on 10% trace sample:")
     print("-" * 80)
-    for w_s, w_sem, w_uniq in sweeps:
-        # Construct concatenated embedding matrix
-        matrix = []
-        for idx in range(screen_embs.shape[0]):
-            screen_id = idx_to_id[idx]
-            app = screen_to_app[screen_id]
-            
-            s_emb = screen_embs[idx]
-            s_emb = s_emb / np.maximum(np.linalg.norm(s_emb), 1e-12)
-            
-            sem_emb = semantic_embs[app]
-            uniq_emb = unique_embs[app]
-            
-            parts = [s_emb * w_s]
-            if w_sem > 0:
-                parts.append(sem_emb * w_sem)
-            if w_uniq > 0:
-                parts.append(uniq_emb * w_uniq)
-                
-            concat = np.concatenate(parts, axis=0)
-            matrix.append(concat)
-            
-        embedding_matrix = np.stack(matrix, axis=0)
+    total_sweeps = len(sweeps)
+    for idx, (w_s, w_sem, w_uniq) in enumerate(sweeps, 1):
+        print(f"[{idx}/{total_sweeps}] Preparing concatenated embedding matrix for Screen={w_s:.1f}, Semantic={w_sem:.1f}, Unique={w_uniq:.1f}...")
         
+        parts = [screen_embs_normed * w_s]
+        if w_sem > 0:
+            parts.append(sem_embs_all * w_sem)
+        if w_uniq > 0:
+            parts.append(uniq_embs_all * w_uniq)
+            
+        embedding_matrix = np.concatenate(parts, axis=1)
+        
+        print(f"[{idx}/{total_sweeps}] Evaluating weights on {len(eval_traces)} sample traces...")
         # Evaluate
         metrics = evaluate(eval_traces, id_to_idx, embedding_matrix, n_jobs=-1)
-        print(f"Weights (Screen={w_s:.1f}, Semantic={w_sem:.1f}, Unique={w_uniq:.1f}):")
+        print(f"[{idx}/{total_sweeps}] Result (Screen={w_s:.1f}, Semantic={w_sem:.1f}, Unique={w_uniq:.1f}):")
         print(f"  Top-1: {metrics['top1']:.4f} | Top-0.01%: {metrics['top001pct']:.4f} | Top-0.1%: {metrics['top01pct']:.4f} | Top-1%: {metrics['top1pct']:.4f} | Top-5%: {metrics['top5pct']:.4f}")
         print("-" * 80)
 

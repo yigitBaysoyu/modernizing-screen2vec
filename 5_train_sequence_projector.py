@@ -26,6 +26,7 @@ import json
 import os
 import random
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import matplotlib
@@ -72,20 +73,30 @@ class SequenceProjector(nn.Module):
 # Data Loading (reuses patterns from 4_evaluate_screen_prediction.py)
 # ============================================================================
 def load_all_embeddings(embeddings_dir: str):
-    """Load all .npz embeddings into a matrix and id mapping."""
+    """Load all .npz embeddings in parallel into a matrix and id mapping."""
     npz_files = sorted(Path(embeddings_dir).glob("*.npz"))
     if not npz_files:
         raise FileNotFoundError(f"No .npz files in '{embeddings_dir}'")
 
-    print(f"Loading {len(npz_files)} embeddings from '{embeddings_dir}'...")
-    id_to_idx = {}
-    embeddings = []
+    print(f"Loading {len(npz_files)} embeddings from '{embeddings_dir}' in parallel...")
 
-    for npz_path in tqdm(npz_files, desc="Loading embeddings"):
+    def load_single(npz_path):
         screen_id = int(npz_path.stem)
         with np.load(npz_path) as f:
             emb = f["embedding"].astype(np.float32)
-        id_to_idx[screen_id] = len(embeddings)
+        return screen_id, emb
+
+    with ThreadPoolExecutor() as executor:
+        results = list(tqdm(
+            executor.map(load_single, npz_files),
+            total=len(npz_files),
+            desc="Loading embeddings"
+        ))
+
+    id_to_idx = {}
+    embeddings = []
+    for idx, (screen_id, emb) in enumerate(results):
+        id_to_idx[screen_id] = idx
         embeddings.append(emb)
 
     matrix = np.stack(embeddings, axis=0)  # (N, D)

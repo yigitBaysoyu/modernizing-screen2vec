@@ -19,7 +19,7 @@ def parse_activity_name(activity_name):
     return pkg, activity.split(".")[-1]
 
 def mean_pooling(model_output, attention_mask):
-    token_embeddings = model_output[0] # First element of model_output contains all token embeddings
+    token_embeddings = model_output[0]
     input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
     return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
 
@@ -47,37 +47,65 @@ def main():
         "--layouts_dir", type=str, default="../rico-data/data/layouts",
         help="Path to RICO layouts directory",
     )
+    parser.add_argument(
+        "--description_col", type=str, default="Description",
+        help="Column name in the CSV that contains full app descriptions. "
+             "If not found, falls back to 'Play Store Name - Category'. "
+             "Screen2Vec uses full Play Store descriptions for their 768-dim BERT embedding.",
+    )
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # 1. Load app details CSV
+    # 1. Load app details CSV — try to find a full description column
     print(f"Loading app details from {args.csv_path}...")
     if not os.path.exists(args.csv_path):
         raise FileNotFoundError(f"App details CSV not found at {args.csv_path}")
-    
+
     df = pd.read_csv(args.csv_path)
-    # Map App Package Name to text: "Play Store Name - Category"
+    print(f"  CSV columns: {list(df.columns)}")
+
+    # Check if a Description column exists
+    desc_col = args.description_col if args.description_col in df.columns else None
+    if desc_col:
+        n_with_desc = df[desc_col].notna().sum()
+        print(f"  Found description column '{desc_col}' with {n_with_desc}/{len(df)} non-null entries.")
+        print(f"  Using FULL descriptions (matching Screen2Vec's approach).")
+        # Use 768-dim model to match Screen2Vec's Sentence-BERT
+        sbert_model_name = "sentence-transformers/all-mpnet-base-v2"  # 768-dim
+        embed_dim_app = 768
+    else:
+        print(f"  No '{args.description_col}' column found. Falling back to 'Name - Category'.")
+        print(f"  NOTE: Screen2Vec uses full Play Store descriptions scraped live via")
+        print(f"  google-play-scraper. Their descriptions are much richer than Name+Category.")
+        print(f"  This is a known limitation if you don't have the full descriptions.")
+        sbert_model_name = "sentence-transformers/all-MiniLM-L6-v2"   # 384-dim
+        embed_dim_app = 384
+
+    # Build app_text_map
     app_text_map = {}
     for idx, row in df.iterrows():
         pkg = row.get("App Package Name")
         name = row.get("Play Store Name")
         category = row.get("Category")
-        if pd.isna(name) or not str(name).strip():
-            name = ""
-        if pd.isna(category) or not str(category).strip():
-            category = ""
-        
-        # Build text description
-        if name and category:
-            text = f"{name} - {category}"
-        elif name:
-            text = name
-        elif category:
-            text = category
+
+        if desc_col and pd.notna(row.get(desc_col)) and str(row.get(desc_col)).strip():
+            text = str(row[desc_col]).strip()
         else:
-            text = ""
-        
+            # Fallback: Name - Category
+            if pd.isna(name) or not str(name).strip():
+                name = ""
+            if pd.isna(category) or not str(category).strip():
+                category = ""
+            if name and category:
+                text = f"{name} - {category}"
+            elif name:
+                text = name
+            elif category:
+                text = category
+            else:
+                text = ""
+
         if pkg:
             app_text_map[str(pkg).strip()] = text
 
@@ -170,10 +198,10 @@ def main():
             app_texts[pkg] = " ".join(clean_parts)
 
     # 5. Embed unique texts using sentence-transformers
-    print("Loading Sentence-BERT model (all-MiniLM-L6-v2)...")
+    print(f"Loading SBERT model '{sbert_model_name}' (embed_dim={embed_dim_app})...")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    tokenizer = AutoTokenizer.from_pretrained("sentence-transformers/all-MiniLM-L6-v2")
-    model = AutoModel.from_pretrained("sentence-transformers/all-MiniLM-L6-v2").to(device)
+    tokenizer = AutoTokenizer.from_pretrained(sbert_model_name)
+    model = AutoModel.from_pretrained(sbert_model_name).to(device)
     model.eval()
 
     print("Embedding app packages...")
@@ -200,8 +228,13 @@ def main():
     # 6. Concatenate embeddings and save to disk
     print(f"Concatenating and saving embeddings to {args.output_dir}...")
     
-    # We also prepare a default 0-embedding of size 384 for absolute fallbacks
-    default_app_emb = np.zeros(384, dtype=np.float32)
+    # We also prepare a default 0-embedding matching the embedding size
+    default_app_emb = np.zeros(embed_dim_app, dtype=np.float32)
+
+
+
+    # Determine screen embedding dim from first file
+    screen_emb_dim = None
 
     for npz_path in tqdm(npz_files, desc="Saving concatenated embeddings"):
         screen_id = int(npz_path.stem)
@@ -210,6 +243,11 @@ def main():
         with np.load(npz_path) as f_data:
             screen_emb = f_data["embedding"].astype(np.float32)
         
+        if screen_emb_dim is None:
+            screen_emb_dim = screen_emb.shape[0]
+            print(f"Concatenating screen ({screen_emb_dim}-dim) + app ({embed_dim_app}-dim) embeddings...")
+            print(f"Output dimension: {screen_emb_dim + embed_dim_app}-dim")
+
         # L2-normalize the sequence-projected screen embedding first
         screen_emb_norm = np.linalg.norm(screen_emb)
         if screen_emb_norm > 1e-12:
@@ -222,12 +260,12 @@ def main():
         else:
             app_emb = default_app_emb
             
-        # Concatenate: (128,) + (384,) -> (512,)
+        # Concatenate screen emb + app emb
         concat_emb = np.concatenate([screen_emb, app_emb], axis=0).astype(np.float32)
         
-        # Save output
+        # Save output (uncompressed np.savez is significantly faster than np.savez_compressed)
         out_path = os.path.join(args.output_dir, f"{screen_id}.npz")
-        np.savez_compressed(out_path, embedding=concat_emb)
+        np.savez(out_path, embedding=concat_emb)
 
     print("Success! Concatenated embeddings created and saved.")
 

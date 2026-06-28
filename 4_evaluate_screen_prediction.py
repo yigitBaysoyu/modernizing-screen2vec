@@ -4,12 +4,19 @@
 Replicates the Screen2Vec paper's Table 3: GUI Screen Prediction evaluation.
 
 For each screen in each RICO interaction trace, uses the other screens in the
-trace as context, averages their embeddings to form a prediction vector, then
-retrieves the nearest neighbour from ALL screen embeddings. Computes Top-k
-accuracy and Normalized RMSE, and prints a comparison table against the paper.
+trace as context to form a prediction vector, then retrieves the nearest
+neighbour from ALL screen embeddings. Computes Top-k accuracy and Normalized
+RMSE, and prints a comparison table against the paper.
+
+Two prediction modes:
+  - Default (mean-of-context): averages the context screen embeddings
+  - LSTM (--lstm_model): runs context through a trained LSTM predictor,
+    matching Screen2Vec's exact evaluation protocol
 
 Usage:
     python 4_evaluate_screen_prediction.py [--embeddings_dir DIR] [--traces_dir DIR]
+    python 4_evaluate_screen_prediction.py --embeddings_dir embeddings_seq_768 \\
+        --lstm_model lstm_predictor_768d.pth
 """
 
 import argparse
@@ -22,9 +29,52 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 from sklearn.metrics.pairwise import cosine_similarity
 from tqdm import tqdm
 from joblib import Parallel, delayed
+
+
+# ============================================================================
+# LSTM Predictor (must match 8_train_lstm_predictor.py exactly)
+# ============================================================================
+class LSTMPredictor(nn.Module):
+    """
+    Replicates Screen2Vec's TracePredictor LSTM combiner.
+    Loaded from a .pth checkpoint produced by 8_train_lstm_predictor.py.
+    """
+    def __init__(self, embed_dim: int):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.combiner = nn.LSTM(embed_dim, embed_dim, batch_first=True)
+
+    def forward(self, context: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            context: (1, T, embed_dim) context screen embeddings
+        Returns:
+            (1, embed_dim) prediction vector, L2-normalized
+        """
+        _, (h, _) = self.combiner(context)
+        pred = h[0]  # (1, embed_dim)
+        return F.normalize(pred, p=2, dim=-1)
+
+
+def load_lstm_predictor(lstm_model_path: str):
+    """
+    Load a trained LSTMPredictor from a .pth checkpoint.
+    Returns the model in eval mode (on CPU).
+    """
+    checkpoint = torch.load(lstm_model_path, map_location="cpu", weights_only=False)
+    embed_dim = checkpoint["embed_dim"]
+    model = LSTMPredictor(embed_dim)
+    model.load_state_dict(checkpoint["state_dict"])
+    model.eval()
+    print(f"  Loaded LSTM predictor (embed_dim={embed_dim}, "
+          f"best_val_loss={checkpoint.get('best_val_loss', 'N/A'):.4f})")
+    return model
 
 
 # ============================================================================
@@ -174,40 +224,86 @@ def eval_single_trace(
     k_01pct,
     k_1pct,
     k_5pct,
+    lstm_predictor=None,
+    n_predictors=4,
 ):
-    """Evaluates prediction metrics for a single RICO interaction trace."""
+    """Evaluates prediction metrics for a single RICO interaction trace.
+
+    Instead of leaving one out from the whole trace (which gives future context),
+    this strictly evaluates predicting the *next* screen given the *previous* 
+    screens (up to n_predictors), matching Screen2Vec's modeltester.py and the
+    causal nature of the LSTM.
+    """
     trace_indices = [id_to_idx[sid] for sid in trace]
     trace_normed = embedding_matrix_normed[trace_indices]  # (T, D)
     trace_raw = embedding_matrix[trace_indices]            # (T, D)
 
     T = len(trace)
+    if T < 2:
+        return T, 0.0, 0, 0, 0, 0, 0
 
-    # RMSE: raw (unnormalized) average of other screens in trace
-    trace_raw_sum = trace_raw.sum(axis=0, keepdims=True)  # (1, D)
-    pred_raw = (trace_raw_sum - trace_raw) / (T - 1)      # (T, D)
-    sq_errs = np.sum((pred_raw - trace_raw) ** 2, axis=1) # (T,)
-    sq_err_sum = float(np.sum(sq_errs))
+    # We evaluate predictions for screens i = 1 to T-1
+    sq_err_sum = 0.0
+    hits_top1 = 0
+    hits_top001pct = 0
+    hits_top01pct = 0
+    hits_top1pct = 0
+    hits_top5pct = 0
 
-    # Prediction: mean of normalized other screens, then L2-normalize
-    trace_normed_sum = trace_normed.sum(axis=0, keepdims=True)  # (1, D)
-    pred = (trace_normed_sum - trace_normed) / (T - 1)          # (T, D)
-    pred_norm = np.linalg.norm(pred, axis=1, keepdims=True)     # (T, 1)
-    pred_normed = pred / np.maximum(pred_norm, 1e-12)           # (T, D)
+    for i in range(1, T):
+        # Context is up to n_predictors previous screens
+        start_idx = max(0, i - n_predictors)
+        ctx_raw = trace_raw[start_idx:i]         # (ctx_len, D)
+        ctx_normed = trace_normed[start_idx:i]   # (ctx_len, D)
+        target_raw = trace_raw[i]                # (D,)
+        target_normed = trace_normed[i]          # (D,)
+        target_global_idx = trace_indices[i]
 
-    # Cosine similarity against ALL screen embeddings
-    similarities = cosine_similarity(pred_normed, embedding_matrix_normed)
+        if lstm_predictor is not None:
+            # LSTM prediction
+            lstm_dim = lstm_predictor.combiner.input_size
+            with torch.no_grad():
+                # Extract the screen part for the LSTM and normalize it
+                ctx_screen = ctx_raw[:, :lstm_dim]
+                ctx_screen_norm = np.linalg.norm(ctx_screen, axis=1, keepdims=True)
+                ctx_screen_normed = ctx_screen / np.maximum(ctx_screen_norm, 1e-12)
 
-    # Rank of target similarity: count screens with similarity >= target's similarity
-    target_sims = similarities[np.arange(T), trace_indices]     # (T,)
-    ranks = np.sum(similarities >= target_sims[:, None], axis=1) # (T,)
+                ctx_tensor = torch.from_numpy(ctx_screen_normed).unsqueeze(0)  # (1, ctx_len, D)
+                out = lstm_predictor(ctx_tensor)                        # (1, D)
+                pred_screen = out.squeeze(0).numpy()                    # (D,)
+                
+                # If there are extra dimensions (e.g., app description), concatenate them!
+                if ctx_raw.shape[1] > lstm_dim:
+                    app_desc = target_raw[lstm_dim:]
+                    pred_raw = np.concatenate([pred_screen, app_desc])
+                else:
+                    pred_raw = pred_screen
 
-    hits_top1 = int(np.sum(ranks <= 1))
-    hits_top001pct = int(np.sum(ranks <= k_001pct))
-    hits_top01pct = int(np.sum(ranks <= k_01pct))
-    hits_top1pct = int(np.sum(ranks <= k_1pct))
-    hits_top5pct = int(np.sum(ranks <= k_5pct))
+                pred_norm = np.linalg.norm(pred_raw)
+                pred_normed = pred_raw / max(pred_norm, 1e-12)
+        else:
+            # Baseline: mean of context
+            pred_raw = ctx_raw.mean(axis=0)                             # (D,)
+            pred_norm = np.linalg.norm(pred_raw)
+            pred_normed = pred_raw / max(pred_norm, 1e-12)              # (D,)
 
-    return T, sq_err_sum, hits_top1, hits_top001pct, hits_top01pct, hits_top1pct, hits_top5pct
+        # RMSE
+        sq_err_sum += float(np.sum((pred_raw - target_raw) ** 2))
+
+        # Ranking (cosine similarity)
+        # Cosine similarity against ALL screen embeddings
+        similarities = cosine_similarity(pred_normed.reshape(1, -1), embedding_matrix_normed)[0]
+        
+        target_sim = similarities[target_global_idx]
+        rank = np.sum(similarities >= target_sim)
+
+        if rank <= 1: hits_top1 += 1
+        if rank <= k_001pct: hits_top001pct += 1
+        if rank <= k_01pct: hits_top01pct += 1
+        if rank <= k_1pct: hits_top1pct += 1
+        if rank <= k_5pct: hits_top5pct += 1
+
+    return T - 1, sq_err_sum, hits_top1, hits_top001pct, hits_top01pct, hits_top1pct, hits_top5pct
 
 
 def evaluate_screen_prediction(
@@ -217,6 +313,7 @@ def evaluate_screen_prediction(
     embedding_matrix_normed: np.ndarray,
     norms: np.ndarray,
     n_jobs: int = -1,
+    lstm_predictor=None,
 ):
     """
     For each screen in each trace, use all other screens in the trace as
@@ -241,21 +338,26 @@ def evaluate_screen_prediction(
     mean_norm = float(np.mean(norms))
     print(f"  Mean embedding L2 norm: {mean_norm:.4f}")
 
-    print(f"  Evaluating traces in parallel (n_jobs={n_jobs})...")
-
-    results = Parallel(n_jobs=n_jobs)(
-        delayed(eval_single_trace)(
-            trace,
-            id_to_idx,
-            embedding_matrix,
-            embedding_matrix_normed,
-            k_001pct,
-            k_01pct,
-            k_1pct,
-            k_5pct,
+    if lstm_predictor is not None:
+        print("  Prediction mode: LSTM (Screen2Vec-equivalent)")
+        print(f"  Evaluating traces in parallel via threads (n_jobs={n_jobs})...")
+        results = Parallel(n_jobs=n_jobs, backend="threading")(
+            delayed(eval_single_trace)(
+                trace, id_to_idx, embedding_matrix, embedding_matrix_normed,
+                k_001pct, k_01pct, k_1pct, k_5pct, lstm_predictor=lstm_predictor,
+            )
+            for trace in tqdm(traces, desc="Evaluating traces (LSTM)")
         )
-        for trace in tqdm(traces, desc="Evaluating traces")
-    )
+    else:
+        print(f"  Prediction mode: mean-of-context (baseline)")
+        print(f"  Evaluating traces in parallel (n_jobs={n_jobs})...")
+        results = Parallel(n_jobs=n_jobs)(
+            delayed(eval_single_trace)(
+                trace, id_to_idx, embedding_matrix, embedding_matrix_normed,
+                k_001pct, k_01pct, k_1pct, k_5pct, lstm_predictor=None,
+            )
+            for trace in tqdm(traces, desc="Evaluating traces")
+        )
 
     # Accumulators
     total_predictions = 0
@@ -309,8 +411,9 @@ def print_comparison_table(our_metrics: dict):
     print(separator)
 
     # Print our result first (highlighted)
+    label = our_metrics.get("label", ">>> Qwen3-VL-Embedding (Ours) <<<")
     print(
-        f"{'>>> Qwen3-VL-Embedding (Ours) <<<':<45} "
+        f"{label:<45} "
         f"{our_metrics['top1']:>8.4f} {our_metrics['top001pct']:>10.4f} "
         f"{our_metrics['top01pct']:>10.4f} {our_metrics['top1pct']:>8.4f} "
         f"{our_metrics['top5pct']:>8.4f} {our_metrics['nrmse']:>10.4f}"
@@ -367,9 +470,29 @@ def main():
         "--n_jobs", type=int, default=-1,
         help="Number of parallel jobs for evaluation (default: -1, use all cores)",
     )
+    parser.add_argument(
+        "--lstm_model", type=str, default=None,
+        help="Path to trained LSTM predictor .pth file (from 8_train_lstm_predictor.py). "
+             "When provided, uses LSTM prediction instead of mean-of-context, "
+             "matching Screen2Vec's exact evaluation protocol.",
+    )
+    parser.add_argument(
+        "--label", type=str, default=None,
+        help="Custom label for the 'Ours' row in the output table.",
+    )
+    parser.add_argument(
+        "--sample_fraction", type=float, default=None,
+        help="Sample a fraction of RICO traces for evaluation (e.g., 0.1 for 10% sample)",
+    )
     args = parser.parse_args()
 
     start = time.time()
+
+    # 0. Load LSTM predictor (if provided)
+    lstm_predictor = None
+    if args.lstm_model:
+        print(f"\n[Step 0/3] Loading LSTM predictor from '{args.lstm_model}'...")
+        lstm_predictor = load_lstm_predictor(args.lstm_model)
 
     # 1. Load embeddings
     print("\n[Step 1/3] Loading embeddings...")
@@ -383,11 +506,27 @@ def main():
     print("\n[Step 2/3] Parsing RICO interaction traces...")
     traces = parse_traces(args.traces_dir, available_ids)
 
+    if args.sample_fraction is not None:
+        np.random.seed(42)
+        n_sample = max(1, int(len(traces) * args.sample_fraction))
+        sample_indices = np.random.choice(len(traces), size=n_sample, replace=False)
+        traces = [traces[i] for i in sample_indices]
+        print(f"  Sampled {len(traces)} traces ({args.sample_fraction*100:.1f}%) for evaluation.")
+
     # 3. Evaluate
     print("\n[Step 3/3] Running screen prediction evaluation...")
     metrics = evaluate_screen_prediction(
-        traces, id_to_idx, emb_matrix, emb_normed, norms, n_jobs=args.n_jobs
+        traces, id_to_idx, emb_matrix, emb_normed, norms,
+        n_jobs=args.n_jobs, lstm_predictor=lstm_predictor,
     )
+
+    # Set label for output table
+    if args.label:
+        metrics["label"] = args.label
+    elif args.lstm_model:
+        metrics["label"] = ">>> Qwen3-VL + LSTM (Ours) <<<"
+    else:
+        metrics["label"] = ">>> Qwen3-VL-Embedding (Ours) <<<"
 
     # 4. Print results
     print_comparison_table(metrics)
