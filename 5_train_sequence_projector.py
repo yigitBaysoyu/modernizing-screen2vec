@@ -44,7 +44,7 @@ from tqdm import tqdm
 # ============================================================================
 class SequenceProjector(nn.Module):
     """
-    Projects pre-computed Qwen2-VL embeddings into a lower-dimensional
+    Projects pre-computed Qwen3-VL embeddings into a lower-dimensional
     space optimized for sequence prediction using a Linear mapping.
     
     A simpler Linear mapping often generalizes much better than an MLP 
@@ -52,12 +52,22 @@ class SequenceProjector(nn.Module):
     """
 
     def __init__(self, input_dim: int = 4096, proj_dim: int = 128, hidden_dim: int = 1024):
-        # hidden_dim is ignored but kept for compatibility with argparse
         super().__init__()
-        self.net = nn.Linear(input_dim, proj_dim, bias=False)
-        
-        # Initialize orthogonally to preserve as much variance as possible at start
-        nn.init.orthogonal_(self.net.weight)
+        if hidden_dim is None:
+            self.net = nn.Linear(input_dim, proj_dim, bias=False)
+            
+            # Initialize orthogonally to preserve as much variance as possible at start
+            nn.init.orthogonal_(self.net.weight)
+        else:
+            self.net = nn.Sequential(
+                nn.Linear(input_dim, hidden_dim, bias=False),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, proj_dim, bias=False)
+            )
+            
+            # Initialize orthogonally to preserve as much variance as possible at start
+            nn.init.orthogonal_(self.net[0].weight)
+            nn.init.orthogonal_(self.net[2].weight)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
