@@ -15,3 +15,5 @@ embeddings.csv
 embeddings/
 embeddings*/
 output.txt
+*.log
+dimension_sweep/logs/
