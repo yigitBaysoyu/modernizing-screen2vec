@@ -1,0 +1,70 @@
+{
+  "meta": {
+    "recipe": "README 'Replicating & Beating Screen2Vec Table 3' (script defaults: hidden_dim=1024, seed=42, full app descriptions), only --proj_dim varied"
+  },
+  "runs": {
+    "32": {
+      "top1": 0.3792,
+      "top001pct": 0.8101,
+      "top01pct": 0.9958,
+      "top1pct": 0.9999,
+      "top5pct": 1.0,
+      "nrmse": 0.6791,
+      "completed_at": "2026-07-10T02:57:02"
+    },
+    "64": {
+      "top1": 0.3909,
+      "top001pct": 0.8128,
+      "top01pct": 0.9953,
+      "top1pct": 1.0,
+      "top5pct": 1.0,
+      "nrmse": 0.8136,
+      "completed_at": "2026-07-10T03:10:01"
+    },
+    "128": {
+      "top1": 0.4182,
+      "top001pct": 0.8288,
+      "top01pct": 0.9964,
+      "top1pct": 1.0,
+      "top5pct": 1.0,
+      "nrmse": 0.8426,
+      "completed_at": "2026-07-10T03:24:02"
+    },
+    "256": {
+      "top1": 0.4131,
+      "top001pct": 0.833,
+      "top01pct": 0.9965,
+      "top1pct": 1.0,
+      "top5pct": 1.0,
+      "nrmse": 0.843,
+      "completed_at": "2026-07-10T03:39:48"
+    },
+    "512": {
+      "top1": 0.4366,
+      "top001pct": 0.8367,
+      "top01pct": 0.9971,
+      "top1pct": 1.0,
+      "top5pct": 1.0,
+      "nrmse": 0.8477,
+      "completed_at": "2026-07-10T03:59:38"
+    },
+    "768": {
+      "top1": 0.4557,
+      "top001pct": 0.8472,
+      "top01pct": 0.9973,
+      "top1pct": 1.0,
+      "top5pct": 1.0,
+      "nrmse": 0.8492,
+      "completed_at": "2026-07-10T04:23:39"
+    },
+    "1024": {
+      "top1": 0.4484,
+      "top001pct": 0.8402,
+      "top01pct": 0.9975,
+      "top1pct": 1.0,
+      "top5pct": 1.0,
+      "nrmse": 0.843,
+      "completed_at": "2026-07-10T04:52:22"
+    }
+  }
+}
