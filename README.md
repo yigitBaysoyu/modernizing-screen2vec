@@ -100,6 +100,13 @@ To reproduce the results that significantly outperform Screen2Vec's Table 3 on t
 
 TODOs
 - [x] Benchmarken Table 3 stechen.
+- [ ] Dimension sweep: repeat key points (512/768/1024) with multiple seeds for error bars.
+      Single-seed results (dimension_sweep/, 2026-07-10) show saturation around 512-768 and a
+      small dip at 1024 (Top-1: 0.4557@768 vs 0.4484@1024) — currently indistinguishable from
+      run-to-run noise; do NOT interpret the dip as real before seed repeats.
+      Note: sweeping beyond 1024 requires widening the projector hidden layer (default 1024),
+      i.e. a deliberate deviation from the replication recipe — otherwise larger dims are
+      rank-limited to 1024 and the curve flattens by construction.
 - Den User-Centric Context-Dependent Flow als Argument bringen, Icons bereitzustellen und Co un Nutzerinteraktionen einfacher zu machen.
 - Eigene Benchmarks für Reconstruction Quality
 - Evtl. Android in the Wild
