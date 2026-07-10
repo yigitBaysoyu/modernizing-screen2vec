@@ -1,31 +1,35 @@
 # Embedding-dimension sweep for the Table 3 (GUI Screen Prediction) pipeline.
 #
-# For each projection dimension D, runs the full downstream chain on top of
-# the frozen raw Qwen3-VL embeddings:
+# Runs the README's replication recipe verbatim for each projection
+# dimension D — the ONLY thing that varies across sweep points is
+# --proj_dim; every other flag is left at the recipe/script default
+# (hidden_dim 1024, seed 42, full app descriptions, full evaluation):
 #
-#   5_train_sequence_projector.py --proj_dim D --hidden_dim 4096
-#       -> embeddings_seq_D/ + sequence_projector_Dd.pth
-#   8_train_lstm_predictor.py --embeddings_dir embeddings_seq_D
-#       -> lstm_predictor_Dd.pth
-#   4_evaluate_screen_prediction.py --embeddings_dir embeddings_seq_D
-#       --lstm_model lstm_predictor_Dd.pth
-#       -> Table 3 metrics (parsed from the comparison table)
+#   1. 5_train_sequence_projector.py --proj_dim D
+#        -> embeddings_seq_D/
+#   2. 6_generate_app_context_embeddings.py
+#        --embeddings_dir embeddings_seq_D --output_dir embeddings_seq_D_with_app
+#        -> embeddings_seq_D_with_app/   (D + 768 app-description dims)
+#   3. 8_train_lstm_predictor.py --embeddings_dir embeddings_seq_D
+#        -> lstm_predictor_Dd.pth
+#   4. 4_evaluate_screen_prediction.py
+#        --embeddings_dir embeddings_seq_D_with_app --lstm_model lstm_predictor_Dd.pth
+#        -> Table 3 metrics (parsed from the comparison table)
+#
+# The D=768 point is therefore an exact re-execution of the README recipe
+# and should reproduce the documented Table-3-beating result.
 #
 # Results accumulate in dimension_sweep/results.json; after every completed
 # dimension the summary table (sweep_table.txt) and the curve figure
-# (sweep_curve.png) are regenerated, so partial sweeps are always visual.
-# Already-completed dimensions are skipped on re-run (use --force to redo).
-#
-# The projector hidden layer is fixed at 4096 for every point so that no
-# dimension is rank-bottlenecked and all sweep points share an identical
-# trunk — the only variable is the output width.
+# (sweep_curve.png) are regenerated. Completed dimensions are skipped on
+# re-run (--force to redo).
 #
 # Usage:
-#   # Full sweep (run in a screen session; each dim takes ~10-30 min):
-#   python 4_sweep_embedding_dimensions.py run --gpu 3
+#   # Full sweep (run in a screen session):
+#   python 4_sweep_embedding_dimensions.py run --gpu 0
 #
-#   # Selected dimensions, plus the raw-4096 no-projector baseline:
-#   python 4_sweep_embedding_dimensions.py run --dims 64,256,768 --include_raw
+#   # Selected dimensions:
+#   python 4_sweep_embedding_dimensions.py run --dims 64,768
 #
 #   # Regenerate table + figure from saved results only:
 #   python 4_sweep_embedding_dimensions.py plot
@@ -46,7 +50,6 @@ FIGURE_PATH = os.path.join(SWEEP_DIR, "sweep_curve.png")
 LOG_DIR = os.path.join(SWEEP_DIR, "logs")
 
 DEFAULT_DIMS = [32, 64, 128, 256, 512, 768, 1024]
-RAW_KEY = "raw4096"  # untouched Qwen embeddings, no projector
 
 METRIC_KEYS = ["top1", "top001pct", "top01pct", "top1pct", "top5pct", "nrmse"]
 METRIC_LABELS = {
@@ -106,55 +109,58 @@ def parse_eval_metrics(log_path, label):
 
 
 def run_dimension(dim, args, env):
-    """Run projector -> LSTM -> evaluation for one dimension.
-    dim is an int, or RAW_KEY for the no-projector baseline."""
+    """README recipe steps 1-4 for one projection dimension."""
     py = sys.executable
-    is_raw = dim == RAW_KEY
-    tag = RAW_KEY if is_raw else str(dim)
+    emb_dir = f"embeddings_seq_{dim}"
+    app_dir = f"{emb_dir}_with_app"
+    lstm_path = f"lstm_predictor_{dim}d.pth"
 
-    if is_raw:
-        emb_dir = args.embeddings_dir
-        lstm_path = "lstm_predictor_raw4096.pth"
+    # Recipe step 1: sequence projector
+    if os.path.isdir(emb_dir) and os.listdir(emb_dir):
+        print(f"    [skip] {emb_dir} already exists")
     else:
-        emb_dir = f"embeddings_seq_{dim}"
-        lstm_path = f"lstm_predictor_{dim}d.pth"
+        print(f"  [1/4] Training projector ({dim}-dim)...")
+        run_stage(
+            [py, "5_train_sequence_projector.py",
+             "--proj_dim", str(dim),
+             "--embeddings_dir", args.embeddings_dir],
+            f"dim{dim}_1_projector.log", env,
+        )
 
-        # Stage 1: projector (skipped if its output already exists)
-        if os.path.isdir(emb_dir) and os.listdir(emb_dir):
-            print(f"    [skip] {emb_dir} already exists")
-        else:
-            print(f"  [1/3] Training projector ({dim}-dim)...")
-            run_stage(
-                [py, "5_train_sequence_projector.py",
-                 "--proj_dim", str(dim),
-                 "--hidden_dim", str(args.hidden_dim),
-                 "--seed", str(args.seed)],
-                f"dim{tag}_1_projector.log", env,
-            )
+    # Recipe step 2: app-context concatenation
+    if os.path.isdir(app_dir) and os.listdir(app_dir):
+        print(f"    [skip] {app_dir} already exists")
+    else:
+        print(f"  [2/4] Concatenating app-context embeddings...")
+        run_stage(
+            [py, "6_generate_app_context_embeddings.py",
+             "--embeddings_dir", emb_dir,
+             "--output_dir", app_dir],
+            f"dim{dim}_2_appcontext.log", env,
+        )
 
-    # Stage 2: LSTM predictor
+    # Recipe step 3: LSTM trace predictor (on screen embeddings)
     if os.path.exists(lstm_path) and not args.force:
         print(f"    [skip] {lstm_path} already exists")
     else:
-        print(f"  [2/3] Training LSTM predictor on {emb_dir}...")
+        print(f"  [3/4] Training LSTM predictor on {emb_dir}...")
         run_stage(
             [py, "8_train_lstm_predictor.py",
              "--embeddings_dir", emb_dir,
-             "--output", lstm_path,
-             "--seed", str(args.seed)],
-            f"dim{tag}_2_lstm.log", env,
+             "--output", lstm_path],
+            f"dim{dim}_3_lstm.log", env,
         )
 
-    # Stage 3: Table 3 evaluation
-    print(f"  [3/3] Evaluating screen prediction...")
-    label = f"OURS_{tag}"
+    # Recipe step 4: evaluation on app-concatenated embeddings
+    print(f"  [4/4] Evaluating screen prediction (with app context)...")
+    label = f"OURS_{dim}"
     eval_cmd = [py, "4_evaluate_screen_prediction.py",
-                "--embeddings_dir", emb_dir,
+                "--embeddings_dir", app_dir,
                 "--lstm_model", lstm_path,
                 "--label", label]
     if args.sample_fraction is not None:
         eval_cmd += ["--sample_fraction", str(args.sample_fraction)]
-    log_path = run_stage(eval_cmd, f"dim{tag}_3_eval.log", env)
+    log_path = run_stage(eval_cmd, f"dim{dim}_4_eval.log", env)
 
     metrics = parse_eval_metrics(log_path, label)
     metrics["completed_at"] = datetime.now().isoformat(timespec="seconds")
@@ -164,14 +170,6 @@ def run_dimension(dim, args, env):
 # =============================================================================
 # Outputs: summary table + curve figure
 # =============================================================================
-def sorted_run_keys(runs):
-    numeric = sorted(int(k) for k in runs if k != RAW_KEY)
-    keys = [str(k) for k in numeric]
-    if RAW_KEY in runs:
-        keys.append(RAW_KEY)
-    return keys
-
-
 def paper_reference():
     """Screen2Vec's best Table 3 row, imported from the evaluation script."""
     try:
@@ -188,25 +186,24 @@ def write_table(results):
         f"{METRIC_LABELS[k]:>10}" for k in METRIC_KEYS
     )
     lines = [
-        f"Embedding-dimension sweep — GUI Screen Prediction (Table 3 protocol)",
-        f"hidden_dim={results['meta'].get('hidden_dim')} "
-        f"seed={results['meta'].get('seed')}",
+        "Embedding-dimension sweep — GUI Screen Prediction "
+        "(README recipe, with app context)",
+        "Final embedding per point = D screen dims + 768 app-description dims",
         "=" * len(header),
         header,
         "-" * len(header),
     ]
-    for key in sorted_run_keys(runs):
+    for key in sorted(runs, key=int):
         m = runs[key]
-        label = "raw 4096" if key == RAW_KEY else key
         lines.append(
-            f"{label:>10} " + " ".join(f"{m[k]:>10.4f}" for k in METRIC_KEYS)
+            f"{key:>10} " + " ".join(f"{m[k]:>10.4f}" for k in METRIC_KEYS)
         )
     if ref:
         lines.append("-" * len(header))
         lines.append(
             f"{'S2V-spat.':>10} "
             + " ".join(f"{ref[k]:>10.4f}" for k in METRIC_KEYS)
-            + "   (Screen2Vec-EUCLIDEAN-spatial, paper)"
+            + "   (Screen2Vec-EUCLIDEAN-spatial, paper; 768+768 dims)"
         )
     lines.append("=" * len(header))
     table = "\n".join(lines)
@@ -221,7 +218,7 @@ def write_figure(results):
     import matplotlib.pyplot as plt
 
     runs = results["runs"]
-    dims = sorted(int(k) for k in runs if k != RAW_KEY)
+    dims = sorted(int(k) for k in runs)
     if not dims:
         return
 
@@ -234,7 +231,6 @@ def write_figure(results):
     ]
     ink, ink2, grid = "#1a1a19", "#575551", "#d9d8d2"
     ref = paper_reference()
-    raw = runs.get(RAW_KEY)
 
     fig, (ax, ax2) = plt.subplots(
         1, 2, figsize=(12, 4.8), dpi=150,
@@ -255,7 +251,8 @@ def write_figure(results):
         a.set_xticks(dims)
         a.set_xticklabels([str(d) for d in dims], rotation=0)
         a.minorticks_off()
-        a.set_xlabel("Projection dimension", color=ink, fontsize=10)
+        a.set_xlabel("Screen-embedding dimension (D of D+768)",
+                     color=ink, fontsize=10)
 
     # --- Left panel: Top-k accuracies (higher is better) ---
     for key, color in series:
@@ -268,32 +265,21 @@ def write_figure(results):
         if ref:
             ax.axhline(ref[key], color=color, linewidth=1.2,
                        linestyle=(0, (4, 3)), alpha=0.55)
-        if raw:
-            ax.plot([dims[-1] * 1.5], [raw[key]], marker="D",
-                    markersize=5, color=color, linestyle="none")
     ax.set_ylabel("Accuracy", color=ink, fontsize=10)
     ax.set_ylim(0, 1.02)
-    title = "GUI screen prediction accuracy vs. embedding dimension"
-    extra = []
+    title = "GUI screen prediction accuracy vs. screen-embedding dimension"
     if ref:
-        extra.append("dashed = Screen2Vec-spatial (paper)")
-    if raw:
-        extra.append("◆ = raw 4096-dim, no projector")
-    if extra:
-        title += "\n(" + ";  ".join(extra) + ")"
+        title += "\n(dashed = Screen2Vec-spatial, paper)"
     ax.set_title(title, color=ink, fontsize=10.5, loc="left")
     ax.legend(frameon=False, fontsize=8.5, labelcolor=ink, loc="lower right")
 
     # --- Right panel: Normalized RMSE (lower is better) ---
     ys = [runs[str(d)]["nrmse"] for d in dims]
     ax2.plot(dims, ys, color="#2a78d6", linewidth=2, marker="o",
-             markersize=5, label="Ours")
+             markersize=5)
     if ref:
         ax2.axhline(ref["nrmse"], color="#2a78d6", linewidth=1.2,
                     linestyle=(0, (4, 3)), alpha=0.55)
-    if raw:
-        ax2.plot([dims[-1] * 1.5], [raw["nrmse"]], marker="D",
-                 markersize=5, color="#2a78d6", linestyle="none")
     ax2.set_ylabel("Normalized RMSE  (lower is better)",
                    color=ink, fontsize=10)
     ax2.set_title("Prediction error", color=ink, fontsize=10.5, loc="left")
@@ -316,8 +302,8 @@ def refresh_outputs(results):
 # =============================================================================
 def main():
     parser = argparse.ArgumentParser(
-        description="Sweep projection dimensions for the Table 3 pipeline "
-                    "and visualize the accuracy/size trade-off."
+        description="Sweep projection dimensions through the README's "
+                    "Table 3 replication recipe and visualize the results."
     )
     sub = parser.add_subparsers(dest="mode", required=True)
 
@@ -325,18 +311,13 @@ def main():
     run_p.add_argument("--dims", type=str,
                        default=",".join(str(d) for d in DEFAULT_DIMS),
                        help="Comma-separated projection dimensions")
-    run_p.add_argument("--include_raw", action="store_true",
-                       help="Also evaluate the raw 4096-dim embeddings "
-                            "without any projector (baseline)")
-    run_p.add_argument("--hidden_dim", type=int, default=4096,
-                       help="Projector hidden width, fixed across the sweep")
-    run_p.add_argument("--seed", type=int, default=42)
     run_p.add_argument("--gpu", type=str, default=None,
                        help="CUDA device id for the training stages")
     run_p.add_argument("--force", action="store_true",
                        help="Re-run dimensions already in results.json")
     run_p.add_argument("--sample_fraction", type=float, default=None,
-                       help="Evaluate on a fraction of traces (quick tests)")
+                       help="NON-RECIPE, quick tests only: evaluate on a "
+                            "fraction of traces")
     run_p.add_argument("--embeddings_dir", type=str, default="embeddings",
                        help="Directory with the raw Qwen embeddings")
 
@@ -356,22 +337,26 @@ def main():
     if args.gpu is not None:
         env["CUDA_VISIBLE_DEVICES"] = args.gpu
 
-    results["meta"] = {"hidden_dim": args.hidden_dim, "seed": args.seed}
+    results["meta"] = {
+        "recipe": "README 'Replicating & Beating Screen2Vec Table 3' "
+                  "(script defaults: hidden_dim=1024, seed=42, full app "
+                  "descriptions), only --proj_dim varied",
+    }
     todo = [int(d) for d in args.dims.split(",") if d.strip()]
-    keys = [str(d) for d in todo] + ([RAW_KEY] if args.include_raw else [])
 
-    print(f"[*] Sweep plan: {keys}  "
-          f"(hidden_dim={args.hidden_dim}, seed={args.seed}, "
-          f"gpu={args.gpu or 'default'})")
+    print(f"[*] Sweep plan: {todo}  (gpu={args.gpu or 'default'})")
+    if args.sample_fraction is not None:
+        print(f"[!] sample_fraction={args.sample_fraction} — NOT the recipe; "
+              f"results from this run are for plumbing tests only.")
 
-    for i, key in enumerate(keys, 1):
+    for i, dim in enumerate(todo, 1):
+        key = str(dim)
         if key in results["runs"] and not args.force:
-            print(f"\n[{i}/{len(keys)}] dim={key}: already done, skipping "
+            print(f"\n[{i}/{len(todo)}] dim={dim}: already done, skipping "
                   f"(--force to redo)")
             continue
-        print(f"\n[{i}/{len(keys)}] dim={key}  "
+        print(f"\n[{i}/{len(todo)}] dim={dim}  "
               f"({datetime.now().strftime('%H:%M:%S')})")
-        dim = RAW_KEY if key == RAW_KEY else int(key)
         try:
             metrics = run_dimension(dim, args, env)
         except RuntimeError as e:
