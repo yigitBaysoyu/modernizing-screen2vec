@@ -57,13 +57,13 @@ def get_hpc_slurm_directives(jobname: str, num_tasks: int):
     nodes_str = "#SBATCH --nodes=1"
     exclusive_str = "#SBATCH --exclusive" if run_exclusive else ""
     array_str = f"#SBATCH --array=0-{num_tasks - 1}" if num_tasks > 1 else ""
-    output_str = "#SBATCH --output=stdout_%A_%a.txt" if num_tasks > 1 else "#SBATCH --output=stdout_%j.txt"
-    error_str = "#SBATCH --error=stderr_%A_%a.txt" if num_tasks > 1 else "#SBATCH --error=stderr_%j.txt"
+    output_str = "#SBATCH --output=output_%A_%a.txt" if num_tasks > 1 else "#SBATCH --output=output_%j.txt"
+    error_str = "#SBATCH --error=output_%A_%a.txt" if num_tasks > 1 else "#SBATCH --error=output_%j.txt"
 
     sbatch_header = f"""\
 #SBATCH -J {PROJECT_NAME}_{jobname}       # job name
-{output_str}            # stdout file
-{error_str}             # stderr file
+{output_str}            # output file (merged stdout and stderr)
+{error_str}             # error file (redirected to output file)
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user={MAIL_FROM}
 {nodes_str}
@@ -98,7 +98,8 @@ def create_master_sbatch_script(path, total_array_elements):
     """
     Write out the master start.sh that handles the array.
     """
-    sbatch_header = get_hpc_slurm_directives("job" if total_array_elements <= 1 else "array", total_array_elements)
+    script_name = "4_evaluate_screen_prediction.py"
+    sbatch_header = get_hpc_slurm_directives(script_name, total_array_elements)
 
     script_content = f"""#!/bin/bash
 {sbatch_header}
@@ -125,11 +126,10 @@ srun python hpc/env.py
 # EXECUTE MAIN WORKLOAD
 srun python 4_evaluate_screen_prediction.py --embeddings_dir embeddings_seq_768_with_app --lstm_model lstm_predictor_768d.pth
 
-# Copy logs from the submission directory to this task's hpc folder
+# Copy merged log from the submission directory to this task's hpc folder
 JOB_ID_STR="${{SLURM_ARRAY_JOB_ID:-$SLURM_JOB_ID}}"
 TASK_ID_STR="${{SLURM_ARRAY_TASK_ID:-0}}"
-cp $SLURM_SUBMIT_DIR/stdout_${{JOB_ID_STR}}_${{TASK_ID_STR}}.txt hpc/ 2>/dev/null || cp $SLURM_SUBMIT_DIR/stdout_${{SLURM_JOB_ID}}.txt hpc/ 2>/dev/null || true
-cp $SLURM_SUBMIT_DIR/stderr_${{JOB_ID_STR}}_${{TASK_ID_STR}}.txt hpc/ 2>/dev/null || cp $SLURM_SUBMIT_DIR/stderr_${{SLURM_JOB_ID}}.txt hpc/ 2>/dev/null || true
+cp $SLURM_SUBMIT_DIR/output_${{JOB_ID_STR}}_${{TASK_ID_STR}}.txt hpc/ 2>/dev/null || cp $SLURM_SUBMIT_DIR/output_${{SLURM_JOB_ID}}.txt hpc/ 2>/dev/null || true
 
 # Finish sending away results
 cd hpc && srun python mail.py "${{JOB_ID_STR}}_${{TASK_ID_STR}}" "${{SLURM_JOB_NAME}}"

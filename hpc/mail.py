@@ -10,7 +10,7 @@ from email.message import EmailMessage
 
 def get_txt_files(directory):
     """Retrieve all .txt files in the given directory."""
-    return [file for file in os.listdir(directory) if file.endswith('.txt') and ('stdout' in file or 'stderr' in file)]
+    return [file for file in os.listdir(directory) if file.endswith('.txt') and ('stdout' in file or 'stderr' in file or 'output' in file)]
 
 def zip_folders_with_prefix(directory, prefix):
     """Zip all folders in the given directory that start with the specified prefix."""
@@ -60,12 +60,20 @@ def main():
     os.system("find -name '*hdf5' -delete")
     os.system("find -name 'W*txt' -delete")
 
-    # Load stdout and stderr for email body
+    # Load output (merged or stdout/stderr) for email body
     try:
-        with open(f"hpc/stdout_{sys.argv[1]}.txt") as stdout_file, open(f"hpc/stderr_{sys.argv[1]}.txt") as stderr_file:
-            body = stdout_file.read() + "\n=============================== \n\n" + stderr_file.read()
+        job_id = sys.argv[1] if len(sys.argv) > 1 else ""
+        if os.path.exists(f"hpc/output_{job_id}.txt"):
+            with open(f"hpc/output_{job_id}.txt") as f:
+                body = f.read()
+        elif os.path.exists(f"output_{job_id}.txt"):
+            with open(f"output_{job_id}.txt") as f:
+                body = f.read()
+        else:
+            with open(f"hpc/stdout_{job_id}.txt") as stdout_file, open(f"hpc/stderr_{job_id}.txt") as stderr_file:
+                body = stdout_file.read() + "\n=============================== \n\n" + stderr_file.read()
     except Exception as e:
-        print(f"Could not read stdout/stderr logs: {e}", file=sys.stderr)
+        print(f"Could not read output logs: {e}", file=sys.stderr)
         body = "Log files could not be read."
 
     # Check if this is an adapter training job (meaning adapter_model_out exists)
@@ -150,8 +158,8 @@ def main():
             # Remove the files after sending the email
             for file in attachments:
                 try:
-                    # Do not delete stdout and stderr files
-                    if 'stdout' in file or 'stderr' in file:
+                    # Do not delete log files
+                    if 'stdout' in file or 'stderr' in file or 'output' in file:
                         continue
                     os.remove(file)
                 except FileNotFoundError as f:
