@@ -13,7 +13,7 @@ from pathlib import Path
 SCRATCH_ROOT = "/lustre/scratch/sgjolieb-screen2vec" if not platform.system() == "Windows" else "C:\\Users\\Jonathan\\Dev"
 PROJECT_NAME = "s2v"
 DATA_DIR_NAME = "rico-data"
-runtarget = "std-l-12h"  # "cpu" / "std" (STD-s-96h, smaller standard nodes), "std-l-12h", "cpu-shm", "gpu-small", "gpu-big"
+runtarget = "cpu"  # "cpu" / "std" (STD-s-96h: 1-45 nodes), "cpu-shm" (SHM-s-96h: 1-6 nodes), "gpu-small", "gpu-big"
 run_exclusive = False  # Set to False for standard shared nodes (STD), or True if requesting exclusive node access (e.g. SHM)
 NUM_GPU: int = 0  # 1..4; how many GPUs to reserve per job
 NOW = datetime.now()
@@ -50,13 +50,11 @@ def get_hpc_slurm_directives(jobname: str, num_tasks: int):
     elif runtarget.lower() in ("cpu-shm", "shm"):
         partition = "#SBATCH --partition=SHM-s-96h"
         timelimit = "#SBATCH --time=4-00:00:00"
-    elif runtarget.lower() == "std-l-12h":
-        partition = "#SBATCH --partition=STD-l-12h"
-        timelimit = "#SBATCH --time=0-12:00:00"
-    elif runtarget.lower() in ("cpu", "cpu-std", "std"):
+    elif runtarget.lower() in ("cpu", "cpu-std", "std", "std-s-96h"):
         partition = "#SBATCH --partition=STD-s-96h"
         timelimit = "#SBATCH --time=4-00:00:00"
 
+    nodes_str = "#SBATCH --nodes=1"
     exclusive_str = "#SBATCH --exclusive" if run_exclusive else ""
     array_str = f"#SBATCH --array=0-{num_tasks - 1}" if num_tasks > 1 else ""
     output_str = "#SBATCH --output=stdout_%A_%a.txt" if num_tasks > 1 else "#SBATCH --output=stdout_%j.txt"
@@ -68,6 +66,7 @@ def get_hpc_slurm_directives(jobname: str, num_tasks: int):
 {error_str}             # stderr file
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user={MAIL_FROM}
+{nodes_str}
 {array_str}
 {exclusive_str}
 {gres}
