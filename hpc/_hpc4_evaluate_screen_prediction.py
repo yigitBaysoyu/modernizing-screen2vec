@@ -140,17 +140,18 @@ def submit_sbatch(script_path: Path):
     subprocess.run(["sbatch", script_path.name], cwd=script_path.parent, check=True)
 
 
-def prepare_task_folder(array_id: int, job: dict):
+def prepare_task_folder(array_id: int, job: dict = None):
     """
     1) Copy the entire codebase to a unique subfolder
-    2) Generate individual job.json for this specific task
+    2) Generate individual job.json for this specific task (if provided)
     """
     dest_folder = copy_folder(array_id)
 
-    # write down job dict as `job.json`
-    json_path = dest_folder / "job.json"
-    with open(json_path, "w") as f:
-        json.dump(job, f)
+    # write down job dict as `job.json` if provided
+    if job is not None:
+        json_path = dest_folder / "job.json"
+        with open(json_path, "w") as f:
+            json.dump(job, f)
 
     return dest_folder
 
@@ -163,10 +164,8 @@ def main():
     
     print(f"Preparing {total} task folders...")
 
-    first_folder = None
-
-    # 1) Create all individual task folders
-    folder_path = prepare_task_folder(0, None)
+    # 1) Create task folder
+    first_folder = prepare_task_folder(0, None)
 
     # 2) Create the single master start script inside the FIRST copied folder
     master_script_path = first_folder / "start.sh"
