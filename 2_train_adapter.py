@@ -46,12 +46,15 @@ class AdapterConfig:
     lora_target_modules = ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
 
     # Training hyperparameters
-    lr_projector = 1e-4       # Learning rate for the MLP projector
-    lr_lora = 2e-5            # Learning rate for LoRA parameters
+    lr_projector = 1e-4  # Learning rate for the MLP projector
+    lr_lora = 2e-5  # Learning rate for LoRA parameters
     num_epochs = 100
-    patience = 3              # Early stopping patience
-    max_target_len = 2048     # Max tokens for the target JSON string
-    grad_accum_steps = 4      # Gradient accumulation steps
+    patience = 3  # Early stopping patience
+    max_target_len = 2048  # Max tokens for the target JSON string
+    grad_accum_steps = 4  # Gradient accumulation steps
+
+
+EMBEDDINGS_DIR = "embeddings_4096"
 
 
 # =============================================================================
@@ -177,7 +180,7 @@ def main():
     # 1. Load pre-computed embeddings
     # -------------------------------------------------------------------------
     try:
-        all_embeddings = load_embeddings("embeddings")
+        all_embeddings = load_embeddings("embeddings", embeddings_dir=EMBEDDINGS_DIR)
     except Exception as e:
         print(f"Critical error: {e}")
         return
@@ -222,13 +225,21 @@ def main():
                 AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=model_dtype, force_download=True)
                 print(f"{model_id} downloaded successfully after cache clean!")
 
-        tokenizer = AutoTokenizer.from_pretrained(cfg.lm_model_id)
+        # local_files_only=True: the main process has just guaranteed the cache
+        # is fully populated above. Without this flag, every rank still calls
+        # into huggingface_hub's remote-resolution/locking path, and concurrent
+        # lock attempts on a networked filesystem (NFS/Lustre home dirs) can
+        # spuriously fail with "does not appear to have a file named ...".
+        # Forcing local-only reads here skips that path entirely and removes
+        # the race between ranks.
+        tokenizer = AutoTokenizer.from_pretrained(cfg.lm_model_id, local_files_only=True)
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
         lm_model = AutoModelForCausalLM.from_pretrained(
             cfg.lm_model_id,
             torch_dtype=model_dtype,
+            local_files_only=True,
         )
 
     # -------------------------------------------------------------------------
@@ -299,13 +310,13 @@ def main():
 
         # --- TRAINING LOOP ---
         for _, row in tqdm(
-            train_embeddings.iterrows(),
-            total=len(train_embeddings),
-            disable=not accelerator.is_local_main_process,
-            desc=(
-                f"Epoch {epoch + 1}/{cfg.num_epochs} "
-                f"| Loss: {avg_loss:.6f}"
-            ),
+                train_embeddings.iterrows(),
+                total=len(train_embeddings),
+                disable=not accelerator.is_local_main_process,
+                desc=(
+                        f"Epoch {epoch + 1}/{cfg.num_epochs} "
+                        f"| Loss: {avg_loss:.6f}"
+                ),
         ):
             # Target: cleaned, minified JSON from the Rico cleaning pipeline
             try:
@@ -399,11 +410,11 @@ def main():
 
         with torch.no_grad():
             for _, row in tqdm(
-                val_embeddings.iterrows(),
-                total=len(val_embeddings),
-                desc="Validating",
-                leave=False,
-                disable=not accelerator.is_local_main_process,
+                    val_embeddings.iterrows(),
+                    total=len(val_embeddings),
+                    desc="Validating",
+                    leave=False,
+                    disable=not accelerator.is_local_main_process,
             ):
                 try:
                     target_json = process_json_file(
@@ -480,15 +491,15 @@ def main():
             patience_counter = 0
             if accelerator.is_local_main_process:
                 print("    [*] New best validation loss! Weights cached in memory.")
-                
+
                 # Automatically save the best model directly to disk
                 os.makedirs("adapter_model_out", exist_ok=True)
                 best_projector_path = "adapter_model_out/best_projector.pth"
                 best_lora_path = "adapter_model_out/best_lora_adapter"
-                
+
                 unwrapped_projector = accelerator.unwrap_model(projector)
                 unwrapped_lm = accelerator.unwrap_model(lm_model)
-                
+
                 # Save to disk (overwriting the previous best)
                 torch.save(unwrapped_projector.state_dict(), best_projector_path)
                 unwrapped_lm.save_pretrained(best_lora_path)
