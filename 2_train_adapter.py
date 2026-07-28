@@ -180,7 +180,7 @@ def main():
     # 1. Load pre-computed embeddings
     # -------------------------------------------------------------------------
     try:
-        all_embeddings = load_embeddings("embeddings", embeddings_dir=EMBEDDINGS_DIR)
+        all_embeddings = load_embeddings(embeddings_dir=EMBEDDINGS_DIR)
     except Exception as e:
         print(f"Critical error: {e}")
         return
