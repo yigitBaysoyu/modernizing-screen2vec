@@ -33,8 +33,11 @@ class AdapterConfig:
     # Qwen3-VL embedding dimension (from step 1_qwen_generate_embeddings.py)
     qwen_embed_dim = 4096
 
-    # Projector: maps Qwen embedding -> virtual prefix tokens for the LM
-    num_prefix_tokens = 128
+    # Projector: maps the pooled Qwen embedding -> N virtual prefix tokens.
+    # A single pooled vector does not carry 128 tokens' worth of content;
+    # 16 full-vector projections suffice and train much faster.
+    num_prefix_tokens = 16
+    proj_hidden_dim = 2048    # hidden width of the 2-layer MLP connector
 
     # RECOMMENDED: Qwen3.5-4B for complex structural layouts (or Qwen3.5-2B)
     lm_model_id = "Qwen/Qwen3.5-4B"
@@ -46,7 +49,11 @@ class AdapterConfig:
     lora_target_modules = ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
 
     # Training hyperparameters
-    lr_projector = 1e-4       # Learning rate for the MLP projector
+    lr_projector = 1e-4       # legacy single-stage joint training (this script)
+    lr_projector_stage1 = 1e-3  # stage 1: projector-only alignment, LM frozen
+                                # (LLaVA uses 2e-3 at effective batch 128;
+                                #  scaled down for our smaller batches)
+    lr_projector_stage2 = 2e-5  # stage 2: joint fine-tune (LLaVA stage 2: 2e-5)
     lr_lora = 2e-5            # Learning rate for LoRA parameters
     num_epochs = 100
     patience = 3              # Early stopping patience
@@ -59,47 +66,54 @@ class AdapterConfig:
 # =============================================================================
 class EmbeddingProjector(nn.Module):
     """
-    Projects a single Qwen3-VL embedding vector into a sequence of
-    *unique* virtual prefix tokens in the language model's embedding space.
+    Projects one pooled Qwen3-VL embedding vector into a short sequence of
+    virtual prefix tokens in the language model's embedding space.
 
-    This is the core "adapter" component, analogous to LLaVA's visual
-    projection layer.  It translates the embedding model's representation
-    into a conditioning signal that the language model can attend to.
+    LLaVA-1.5-style connector (two-layer MLP with GELU), adapted to a single
+    pooled input vector: LLaVA maps each of ~256 distinct patch features to
+    its own token, whereas we fan the FULL 4096-dim vector out into
+    `num_prefix_tokens` tokens via the output layer, so every prefix token
+    is a learned projection of the whole embedding.
 
-    The 4096-dim embedding is reshaped into `num_prefix_tokens` chunks
-    (e.g. 128 × 32), so each prefix token receives a *different* slice
-    of the original representation.  A learned positional embedding is
-    added per token to further differentiate them.
+    Two constraints the previous design violated (diagnosed 2026-07-10 —
+    constant-prefix mode collapse, decoder ignored the screen entirely):
+      - no slicing of the pooled vector into per-token chunks (a 32-dim
+        slice of an L2-normalised vector carries almost no signal);
+      - no additive positional embedding (its N(0,1) init has norm
+        ~sqrt(D) and drowns the content pathway ~80x).
 
-    Example:
-        projector = EmbeddingProjector(qwen_dim=4096, lm_hidden_dim=896, num_prefix_tokens=128)
+    `out_scale` is a learnable scalar that must be calibrated once at init
+    (see calibrate_out_scale) so prefix tokens start at the same average
+    norm as the LM's own token embeddings; otherwise the LM sees wildly
+    out-of-distribution inputs.
 
-        qwen_embedding = torch.randn(1, 4096)        # one pre-computed Qwen3-VL embedding
-        prefix = projector(qwen_embedding)            # -> [1, 128, 896]
-        # These 128 virtual tokens are prepended to the LM's input sequence.
-        # The LM then generates the cleaned JSON conditioned on them.
-
-    Input:  [B, 4096]  (Qwen3-VL embedding)
+    Input:  [B, 4096]  (L2-normalised Qwen3-VL embedding)
     Output: [B, num_prefix_tokens, lm_hidden_dim]  (prefix for the LM)
     """
 
-    def __init__(self, qwen_dim, lm_hidden_dim, num_prefix_tokens):
+    def __init__(self, qwen_dim, lm_hidden_dim, num_prefix_tokens,
+                 hidden_dim=None):
         super().__init__()
         self.num_prefix_tokens = num_prefix_tokens
         self.lm_hidden_dim = lm_hidden_dim
+        hidden_dim = hidden_dim or AdapterConfig.proj_hidden_dim
 
-        assert qwen_dim % num_prefix_tokens == 0, (
-            f"qwen_dim ({qwen_dim}) must be divisible by "
-            f"num_prefix_tokens ({num_prefix_tokens})"
-        )
-        chunk_dim = qwen_dim // num_prefix_tokens  # e.g. 4096 / 128 = 32
-
-        self.projector = nn.Sequential(
-            nn.Linear(chunk_dim, lm_hidden_dim * 2),
+        self.mlp = nn.Sequential(
+            nn.Linear(qwen_dim, hidden_dim),
             nn.GELU(),
-            nn.Linear(lm_hidden_dim * 2, lm_hidden_dim),
+            nn.Linear(hidden_dim, num_prefix_tokens * lm_hidden_dim),
         )
-        self.prefix_pos = nn.Embedding(num_prefix_tokens, lm_hidden_dim)
+        self.out_scale = nn.Parameter(torch.ones(()))
+
+    @torch.no_grad()
+    def calibrate_out_scale(self, sample_embeddings, target_token_norm):
+        """Sets out_scale so initial prefix-token norms match
+        `target_token_norm` (the LM token-embedding mean norm). Call once
+        before training, with the same samples on every rank."""
+        out = self.mlp(sample_embeddings)
+        out = out.view(-1, self.num_prefix_tokens, self.lm_hidden_dim)
+        mean_norm = out.norm(dim=-1).mean().item()
+        self.out_scale.fill_(target_token_norm / max(mean_norm, 1e-8))
 
     def forward(self, qwen_embedding):
         """
@@ -109,13 +123,9 @@ class EmbeddingProjector(nn.Module):
             [B, num_prefix_tokens, lm_hidden_dim] virtual prefix token embeddings.
         """
         B = qwen_embedding.size(0)
-        if qwen_embedding.dim() == 2:
-            # Reshape [B, 4096] -> [B, 128, 32]: each token gets a unique slice
-            qwen_embedding = qwen_embedding.view(B, self.num_prefix_tokens, -1)
-
-        projected = self.projector(qwen_embedding)  # [B, 128, lm_hidden_dim]
-        positions = torch.arange(self.num_prefix_tokens, device=projected.device)
-        return projected + self.prefix_pos(positions)
+        out = self.mlp(qwen_embedding)
+        out = out.view(B, self.num_prefix_tokens, self.lm_hidden_dim)
+        return out * self.out_scale
 
 
 # =============================================================================

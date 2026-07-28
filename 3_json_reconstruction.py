@@ -29,7 +29,8 @@ from peft import PeftModel
 
 from utils import process_json_file, CUDA_VISIBLE_DEVICE, load_embeddings
 
-os.environ["CUDA_VISIBLE_DEVICES"] = CUDA_VISIBLE_DEVICE
+# Respect an externally set CUDA_VISIBLE_DEVICES; fall back to utils default.
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", CUDA_VISIBLE_DEVICE)
 
 # Import shared components from the training script (which has a leading
 # digit in its filename, so we use importlib).

@@ -33,6 +33,16 @@
 #
 #   # Regenerate table + figure from saved results only:
 #   python 4_sweep_embedding_dimensions.py plot
+#
+# --hidden_dim widens the projector's hidden layer (recipe default: 1024).
+# Values above 1024 are REQUIRED for proj_dim > 1024 (otherwise the output
+# is rank-limited by the hidden layer) and are a deliberate deviation from
+# the README recipe — discussed/approved 2026-07-28 in response to the
+# supervisor's dim=16/2048 request. Non-default hidden widths write fully
+# suffixed artifacts (embeddings_seq_D_h<H>/, lstm_predictor_Dd_h<H>.pth,
+# results_h<H>.json, ...) so the recipe-faithful hidden=1024 sweep results
+# are never overwritten. `plot --hidden_dim H` regenerates that sweep's
+# table/figure.
 
 import os
 import re
@@ -50,6 +60,21 @@ FIGURE_PATH = os.path.join(SWEEP_DIR, "sweep_curve.png")
 LOG_DIR = os.path.join(SWEEP_DIR, "logs")
 
 DEFAULT_DIMS = [32, 64, 128, 256, 512, 768, 1024]
+RECIPE_HIDDEN_DIM = 1024
+
+
+def apply_hidden_suffix(hidden_dim):
+    """Points the results/table/figure paths at this hidden width's own
+    files (recipe default 1024 keeps the original unsuffixed paths).
+    Returns the artifact suffix used for dirs/checkpoints/logs."""
+    global RESULTS_PATH, TABLE_PATH, FIGURE_PATH
+    if hidden_dim == RECIPE_HIDDEN_DIM:
+        return ""
+    suffix = f"_h{hidden_dim}"
+    RESULTS_PATH = os.path.join(SWEEP_DIR, f"results{suffix}.json")
+    TABLE_PATH = os.path.join(SWEEP_DIR, f"sweep_table{suffix}.txt")
+    FIGURE_PATH = os.path.join(SWEEP_DIR, f"sweep_curve{suffix}.png")
+    return suffix
 
 METRIC_KEYS = ["top1", "top001pct", "top01pct", "top1pct", "top5pct", "nrmse"]
 METRIC_LABELS = {
@@ -108,23 +133,26 @@ def parse_eval_metrics(log_path, label):
     raise RuntimeError(f"Could not find metrics row '{label}' in {log_path}")
 
 
-def run_dimension(dim, args, env):
+def run_dimension(dim, args, env, suffix=""):
     """README recipe steps 1-4 for one projection dimension."""
     py = sys.executable
-    emb_dir = f"embeddings_seq_{dim}"
+    emb_dir = f"embeddings_seq_{dim}{suffix}"
     app_dir = f"{emb_dir}_with_app"
-    lstm_path = f"lstm_predictor_{dim}d.pth"
+    lstm_path = f"lstm_predictor_{dim}d{suffix}.pth"
 
     # Recipe step 1: sequence projector
     if os.path.isdir(emb_dir) and os.listdir(emb_dir):
         print(f"    [skip] {emb_dir} already exists")
     else:
-        print(f"  [1/4] Training projector ({dim}-dim)...")
+        print(f"  [1/4] Training projector ({dim}-dim, "
+              f"hidden {args.hidden_dim})...")
         run_stage(
             [py, "5_train_sequence_projector.py",
              "--proj_dim", str(dim),
+             "--hidden_dim", str(args.hidden_dim),
+             "--output_dir", emb_dir,
              "--embeddings_dir", args.embeddings_dir],
-            f"dim{dim}_1_projector.log", env,
+            f"dim{dim}{suffix}_1_projector.log", env,
         )
 
     # Recipe step 2: app-context concatenation
@@ -136,7 +164,7 @@ def run_dimension(dim, args, env):
             [py, "6_generate_app_context_embeddings.py",
              "--embeddings_dir", emb_dir,
              "--output_dir", app_dir],
-            f"dim{dim}_2_appcontext.log", env,
+            f"dim{dim}{suffix}_2_appcontext.log", env,
         )
 
     # Recipe step 3: LSTM trace predictor (on screen embeddings)
@@ -148,7 +176,7 @@ def run_dimension(dim, args, env):
             [py, "8_train_lstm_predictor.py",
              "--embeddings_dir", emb_dir,
              "--output", lstm_path],
-            f"dim{dim}_3_lstm.log", env,
+            f"dim{dim}{suffix}_3_lstm.log", env,
         )
 
     # Recipe step 4: evaluation on app-concatenated embeddings
@@ -160,7 +188,7 @@ def run_dimension(dim, args, env):
                 "--label", label]
     if args.sample_fraction is not None:
         eval_cmd += ["--sample_fraction", str(args.sample_fraction)]
-    log_path = run_stage(eval_cmd, f"dim{dim}_4_eval.log", env)
+    log_path = run_stage(eval_cmd, f"dim{dim}{suffix}_4_eval.log", env)
 
     metrics = parse_eval_metrics(log_path, label)
     metrics["completed_at"] = datetime.now().isoformat(timespec="seconds")
@@ -185,9 +213,14 @@ def write_table(results):
     header = f"{'dim':>10} " + " ".join(
         f"{METRIC_LABELS[k]:>10}" for k in METRIC_KEYS
     )
+    hidden = results.get("meta", {}).get("hidden_dim", RECIPE_HIDDEN_DIM)
+    recipe_note = (
+        "(README recipe, with app context)" if hidden == RECIPE_HIDDEN_DIM
+        else f"(DEVIATION from README recipe: projector hidden_dim={hidden}, "
+             f"recipe default {RECIPE_HIDDEN_DIM}; approved 2026-07-28)"
+    )
     lines = [
-        "Embedding-dimension sweep — GUI Screen Prediction "
-        "(README recipe, with app context)",
+        "Embedding-dimension sweep — GUI Screen Prediction " + recipe_note,
         "Final embedding per point = D screen dims + 768 app-description dims",
         "=" * len(header),
         header,
@@ -320,10 +353,19 @@ def main():
                             "fraction of traces")
     run_p.add_argument("--embeddings_dir", type=str, default="embeddings",
                        help="Directory with the raw Qwen embeddings")
+    run_p.add_argument("--hidden_dim", type=int, default=RECIPE_HIDDEN_DIM,
+                       help="Projector hidden width (recipe default "
+                            f"{RECIPE_HIDDEN_DIM}; non-default values are a "
+                            "recipe deviation and write _h<H>-suffixed "
+                            "artifacts/results)")
 
-    sub.add_parser("plot", help="Regenerate table + figure from results.json")
+    plot_p = sub.add_parser(
+        "plot", help="Regenerate table + figure from results.json")
+    plot_p.add_argument("--hidden_dim", type=int, default=RECIPE_HIDDEN_DIM,
+                        help="Which sweep's results to plot")
 
     args = parser.parse_args()
+    suffix = apply_hidden_suffix(args.hidden_dim)
     results = load_results()
 
     if args.mode == "plot":
@@ -334,17 +376,33 @@ def main():
         return
 
     env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"  # stage logs stream live (tail -f works)
     if args.gpu is not None:
         env["CUDA_VISIBLE_DEVICES"] = args.gpu
 
+    if args.hidden_dim == RECIPE_HIDDEN_DIM:
+        recipe_desc = ("README 'Replicating & Beating Screen2Vec Table 3' "
+                       "(script defaults: hidden_dim=1024, seed=42, full app "
+                       "descriptions), only --proj_dim varied")
+    else:
+        recipe_desc = ("README Table 3 recipe with DEVIATION: projector "
+                       f"hidden_dim={args.hidden_dim} (recipe default "
+                       f"{RECIPE_HIDDEN_DIM}); needed for proj_dim > 1024, "
+                       "applied uniformly; approved 2026-07-28")
     results["meta"] = {
-        "recipe": "README 'Replicating & Beating Screen2Vec Table 3' "
-                  "(script defaults: hidden_dim=1024, seed=42, full app "
-                  "descriptions), only --proj_dim varied",
+        "recipe": recipe_desc,
+        "hidden_dim": args.hidden_dim,
     }
     todo = [int(d) for d in args.dims.split(",") if d.strip()]
+    if max(todo) > args.hidden_dim:
+        raise SystemExit(
+            f"[!] proj_dim {max(todo)} > hidden_dim {args.hidden_dim}: the "
+            f"output would be rank-limited by the hidden layer. Use "
+            f"--hidden_dim >= {max(todo)}."
+        )
 
-    print(f"[*] Sweep plan: {todo}  (gpu={args.gpu or 'default'})")
+    print(f"[*] Sweep plan: {todo}  (gpu={args.gpu or 'default'}, "
+          f"hidden_dim={args.hidden_dim})")
     if args.sample_fraction is not None:
         print(f"[!] sample_fraction={args.sample_fraction} — NOT the recipe; "
               f"results from this run are for plumbing tests only.")
@@ -358,7 +416,7 @@ def main():
         print(f"\n[{i}/{len(todo)}] dim={dim}  "
               f"({datetime.now().strftime('%H:%M:%S')})")
         try:
-            metrics = run_dimension(dim, args, env)
+            metrics = run_dimension(dim, args, env, suffix)
         except RuntimeError as e:
             print(f"  [-] FAILED: {e}")
             print("      Fix the issue and re-run — completed dims are kept.")

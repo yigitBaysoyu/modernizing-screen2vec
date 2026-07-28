@@ -1,0 +1,89 @@
+{
+  "meta": {
+    "recipe": "README Table 3 recipe with DEVIATION: projector hidden_dim=4096 (recipe default 1024); needed for proj_dim > 1024, applied uniformly; approved 2026-07-28",
+    "hidden_dim": 4096
+  },
+  "runs": {
+    "16": {
+      "top1": 0.3797,
+      "top001pct": 0.8101,
+      "top01pct": 0.9954,
+      "top1pct": 1.0,
+      "top5pct": 1.0,
+      "nrmse": 0.4244,
+      "completed_at": "2026-07-28T15:14:29"
+    },
+    "32": {
+      "top1": 0.4034,
+      "top001pct": 0.8277,
+      "top01pct": 0.9954,
+      "top1pct": 1.0,
+      "top5pct": 1.0,
+      "nrmse": 0.6715,
+      "completed_at": "2026-07-28T15:27:22"
+    },
+    "64": {
+      "top1": 0.3932,
+      "top001pct": 0.8143,
+      "top01pct": 0.9963,
+      "top1pct": 1.0,
+      "top5pct": 1.0,
+      "nrmse": 0.8014,
+      "completed_at": "2026-07-28T15:40:34"
+    },
+    "128": {
+      "top1": 0.3966,
+      "top001pct": 0.8204,
+      "top01pct": 0.9965,
+      "top1pct": 1.0,
+      "top5pct": 1.0,
+      "nrmse": 0.8088,
+      "completed_at": "2026-07-28T15:54:39"
+    },
+    "256": {
+      "top1": 0.4102,
+      "top001pct": 0.8302,
+      "top01pct": 0.9968,
+      "top1pct": 1.0,
+      "top5pct": 1.0,
+      "nrmse": 0.8305,
+      "completed_at": "2026-07-28T16:10:38"
+    },
+    "512": {
+      "top1": 0.4573,
+      "top001pct": 0.8448,
+      "top01pct": 0.9973,
+      "top1pct": 1.0,
+      "top5pct": 1.0,
+      "nrmse": 0.8616,
+      "completed_at": "2026-07-28T16:31:25"
+    },
+    "768": {
+      "top1": 0.4247,
+      "top001pct": 0.8366,
+      "top01pct": 0.997,
+      "top1pct": 1.0,
+      "top5pct": 1.0,
+      "nrmse": 0.8398,
+      "completed_at": "2026-07-28T16:56:51"
+    },
+    "1024": {
+      "top1": 0.4767,
+      "top001pct": 0.8613,
+      "top01pct": 0.9974,
+      "top1pct": 1.0,
+      "top5pct": 1.0,
+      "nrmse": 0.8721,
+      "completed_at": "2026-07-28T17:26:38"
+    },
+    "2048": {
+      "top1": 0.4639,
+      "top001pct": 0.8543,
+      "top01pct": 0.9973,
+      "top1pct": 1.0,
+      "top5pct": 1.0,
+      "nrmse": 0.8629,
+      "completed_at": "2026-07-28T19:13:51"
+    }
+  }
+}
