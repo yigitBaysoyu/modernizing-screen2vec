@@ -68,28 +68,51 @@ def calculate_iou(box_a, box_b):
     return inter / union if union > 0 else 0.0
 
 
+def calculate_levenshtein_distance(s1: str, s2: str) -> int:
+    """Calculate the exact Levenshtein (edit) distance between two strings."""
+    if len(s1) < len(s2):
+        s1, s2 = s2, s1
+
+    if len(s2) == 0:
+        return len(s1)
+
+    previous_row = list(range(len(s2) + 1))
+    for i, c1 in enumerate(s1):
+        current_row = [i + 1] + [0] * len(s2)
+        for j, c2 in enumerate(s2):
+            insertions = previous_row[j + 1] + 1
+            deletions = current_row[j] + 1
+            substitutions = previous_row[j] + (c1 != c2)
+            current_row[j + 1] = min(insertions, deletions, substitutions)
+        previous_row = current_row
+
+    return previous_row[-1]
+
+
 def evaluate_json_quality(pred_str, gt_str):
     """
     Comprehensive evaluation of a generated JSON against ground truth.
 
     Returns a dict of metrics:
-        string_similarity  – SequenceMatcher ratio (0-1)
-        json_valid          – whether the prediction parses as JSON
-        app_match           – app field matches
-        activity_match      – activity field matches
-        component_count_gt  – # components in ground truth (recursive)
-        component_count_pred– # components in prediction (recursive)
-        class_accuracy      – fraction of paired components with matching class
-        avg_iou             – mean bounding-box IoU across paired components
+        string_similarity       – SequenceMatcher ratio (0-1) [Gestalt Pattern Matching]
+        levenshtein_distance    – Edit distance on minified JSONs
+        levenshtein_similarity  – Normalized Levenshtein similarity (0-1)
+        json_valid              – whether the prediction parses as JSON
+        app_match               – app field matches
+        activity_match          – activity field matches
+        component_count_gt      – # components in ground truth (recursive)
+        component_count_pred    – # components in prediction (recursive)
+        class_accuracy          – fraction of paired components with matching class
+        avg_iou                 – mean bounding-box IoU across paired components
     """
     metrics = {}
 
-    # 1. Raw string similarity
+    # 1. Sequence similarity (Gestalt / difflib SequenceMatcher)
     metrics["string_similarity"] = difflib.SequenceMatcher(
         None, pred_str, gt_str
     ).ratio()
 
-    # 2. JSON validity
+    # 2. JSON validity and minified JSON extraction
     pred_data, gt_data = None, None
     try:
         pred_data = json.loads(pred_str)
@@ -99,8 +122,28 @@ def evaluate_json_quality(pred_str, gt_str):
 
     try:
         gt_data = json.loads(gt_str)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, TypeError):
         pass
+
+    # Build minified JSON strings for GT and Prediction (or fallback to raw strings if unparseable)
+    pred_min_str = (
+        json.dumps(pred_data, separators=(",", ":"))
+        if pred_data is not None
+        else pred_str
+    )
+    gt_min_str = (
+        json.dumps(gt_data, separators=(",", ":"))
+        if gt_data is not None
+        else gt_str
+    )
+
+    # 3. Levenshtein Distance & Similarity on minified JSONs
+    lev_dist = calculate_levenshtein_distance(pred_min_str, gt_min_str)
+    max_len = max(len(pred_min_str), len(gt_min_str))
+    lev_sim = 1.0 - (lev_dist / max_len) if max_len > 0 else 1.0
+
+    metrics["levenshtein_distance"] = lev_dist
+    metrics["levenshtein_similarity"] = lev_sim
 
     if not pred_data or not gt_data:
         metrics["app_match"] = False
@@ -111,18 +154,18 @@ def evaluate_json_quality(pred_str, gt_str):
         metrics["avg_iou"] = 0.0
         return metrics
 
-    # 3. App / Activity match
+    # 4. App / Activity match
     metrics["app_match"] = pred_data.get("app") == gt_data.get("app")
     metrics["activity_match"] = pred_data.get("activity") == gt_data.get("activity")
 
-    # 4. Component-level analysis (flatten both trees)
+    # 5. Component-level analysis (flatten both trees)
     pred_comps = flatten_components(pred_data)
     gt_comps = flatten_components(gt_data)
 
     metrics["component_count_pred"] = len(pred_comps)
     metrics["component_count_gt"] = len(gt_comps)
 
-    # 5. Paired comparison (by DFS tree order)
+    # 6. Paired comparison (by DFS tree order)
     min_len = min(len(pred_comps), len(gt_comps))
     if min_len == 0:
         metrics["class_accuracy"] = 0.0
@@ -360,27 +403,26 @@ def main():
         print(f"{left:<{col_width}} | {right:<{col_width}}")
     print(f"{'-' * 115}\n")
 
+    valid_icon = "Yes" if metrics["json_valid"] else "No"
+    app_icon = "Yes" if metrics["app_match"] else "No"
+    act_icon = "Yes" if metrics["activity_match"] else "No"
+
     print("\n" + "-" * 50)
     print("METRICS:")
     print("-" * 50)
-    valid_icon = "Yes" if metrics["json_valid"] else "No"
-    print(f"JSON Valid               : {valid_icon}")
-    print(
-        f"String Similarity        : {metrics['string_similarity']:.4f} "
-        f"(1.0 = perfect)"
-    )
-    app_icon = "Yes" if metrics["app_match"] else "No"
-    act_icon = "Yes" if metrics["activity_match"] else "No"
-    print(f"App Match                : {app_icon}")
-    print(f"Activity Match           : {act_icon}")
-    print(f"Component Count (GT)     : {metrics['component_count_gt']}")
-    print(f"Component Count (Pred)   : {metrics['component_count_pred']}")
-    print(f"Class Accuracy           : {metrics['class_accuracy']:.4f}")
-    print(
-        f"Average Bounds IoU       : {metrics['avg_iou']:.4f} "
-        f"(1.0 = perfect)"
-    )
-    print(f"Execution Time           : {time.time() - start_time:.2f} seconds")
+    print(f"JSON Valid                         : {valid_icon}")
+    print(f"Sequence Similarity (Gestalt)*     : {metrics['string_similarity']:.4f} ")
+    print(f"Levenshtein Distance (minified)    : {metrics['levenshtein_distance']} ")
+    print(f"Levenshtein Similarity (minified)* : {metrics['levenshtein_similarity']:.4f} ")
+    print(f"App Match                          : {app_icon}")
+    print(f"Activity Match                     : {act_icon}")
+    print(f"Component Count (GT)               : {metrics['component_count_gt']}")
+    print(f"Component Count (Pred)             : {metrics['component_count_pred']}")
+    print(f"Class Accuracy*                    : {metrics['class_accuracy']:.4f}")
+    print(f"Average Bounds IoU*                : {metrics['avg_iou']:.4f}")
+    print("="* 50)
+    print("Note: * indicates that 1.0 is a perfect match.")
+    print(f"Execution Time                     : {time.time() - start_time:.2f} seconds")
     print("=" * 50)
 
 

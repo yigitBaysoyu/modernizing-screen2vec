@@ -47,6 +47,17 @@ python 3_json_reconstruction.py \
   [--max_tokens 1024]
 ```
 
+Example:
+
+```bash
+ python 3_json_reconstruction.py 
+          --projector_model adapter_model_out/best_projector.pth \
+          --lora_model adapter_model_out/best_lora_adapter/ \
+          --index 3  \  # 0 .. 66260
+          --embeddings_dir embeddings_4096/   \ 
+          [--full-output]
+```
+
 ### Parameters:
 - `--projector_model`: Path to the trained projector weights (`.pth`) file.
 - `--lora_model`: Path to the trained LoRA adapter directory.
