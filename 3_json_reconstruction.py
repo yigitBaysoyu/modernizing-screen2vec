@@ -216,7 +216,7 @@ def main():
         help="Index of the embedding to reconstruct",
     )
     parser.add_argument(
-        "--embeddings_dir", type=str, default="embeddings",
+        "--embeddings_dir", type=str, default="embeddings_4096/",
         help="Path to embeddings directory",
     )
     parser.add_argument(

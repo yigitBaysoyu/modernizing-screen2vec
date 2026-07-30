@@ -36,8 +36,8 @@ class AdapterConfig:
     # Projector: maps Qwen embedding -> virtual prefix tokens for the LM
     num_prefix_tokens = 128
 
-    # RECOMMENDED: Qwen3.5-4B for complex structural layouts (or Qwen3.5-2B)
-    lm_model_id = "Qwen/Qwen3.5-4B"
+    # RECOMMENDED: Qwen3.5-2B for complex structural layouts
+    lm_model_id = "Qwen/Qwen3.5-2B"
 
     # LoRA fine-tuning parameters updated for newer Qwen structural compliance
     lora_r = 16
@@ -49,7 +49,7 @@ class AdapterConfig:
     lr_projector = 1e-4  # Learning rate for the MLP projector
     lr_lora = 2e-5  # Learning rate for LoRA parameters
     num_epochs = 100
-    patience = 3  # Early stopping patience
+    patience = 5  # Early stopping patience
     max_target_len = 2048  # Max tokens for the target JSON string
     grad_accum_steps = 4  # Gradient accumulation steps
 
@@ -69,10 +69,10 @@ class EmbeddingProjector(nn.Module):
     projection layer.  It translates the embedding model's representation
     into a conditioning signal that the language model can attend to.
 
-    The 4096-dim embedding is reshaped into `num_prefix_tokens` chunks
-    (e.g. 128 × 32), so each prefix token receives a *different* slice
-    of the original representation.  A learned positional embedding is
-    added per token to further differentiate them.
+    The full 4096-dim embedding is broadcast to each of the
+    `num_prefix_tokens` positions, so every prefix token sees the
+    complete representation.  A learned positional embedding is added
+    per token to differentiate them.
 
     Example:
         projector = EmbeddingProjector(qwen_dim=4096, lm_hidden_dim=896, num_prefix_tokens=128)
@@ -91,14 +91,8 @@ class EmbeddingProjector(nn.Module):
         self.num_prefix_tokens = num_prefix_tokens
         self.lm_hidden_dim = lm_hidden_dim
 
-        assert qwen_dim % num_prefix_tokens == 0, (
-            f"qwen_dim ({qwen_dim}) must be divisible by "
-            f"num_prefix_tokens ({num_prefix_tokens})"
-        )
-        chunk_dim = qwen_dim // num_prefix_tokens  # e.g. 4096 / 128 = 32
-
         self.projector = nn.Sequential(
-            nn.Linear(chunk_dim, lm_hidden_dim * 2),
+            nn.Linear(qwen_dim, lm_hidden_dim * 2),
             nn.GELU(),
             nn.Linear(lm_hidden_dim * 2, lm_hidden_dim),
         )
@@ -111,10 +105,9 @@ class EmbeddingProjector(nn.Module):
         Returns:
             [B, num_prefix_tokens, lm_hidden_dim] virtual prefix token embeddings.
         """
-        B = qwen_embedding.size(0)
         if qwen_embedding.dim() == 2:
-            # Reshape [B, 4096] -> [B, 128, 32]: each token gets a unique slice
-            qwen_embedding = qwen_embedding.view(B, self.num_prefix_tokens, -1)
+            # Expand [B, 4096] -> [B, 128, 4096]: each token sees the full embedding
+            qwen_embedding = qwen_embedding.unsqueeze(1).expand(-1, self.num_prefix_tokens, -1)
 
         projected = self.projector(qwen_embedding)  # [B, 128, lm_hidden_dim]
         positions = torch.arange(self.num_prefix_tokens, device=projected.device)
