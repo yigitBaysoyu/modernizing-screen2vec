@@ -11,7 +11,13 @@ from pathlib import Path
 # ==============================================================================
 
 # How many jobs out of the JOBS array each SLURM array task works on
-JOBS_PER_BATCH = 8283
+JOBS_PER_BATCH = 250
+
+# Set to None to run all batches, otherwise set to number of batches to be run (all others are discarded)
+MAX_BATCHES = 8
+# Total jobs being run is JOBS_PER_BATCH x MAX_BATCHES if MAX_BATCHES is not None
+
+input(f"Only {JOBS_PER_BATCH} x {MAX_BATCHES} = {JOBS_PER_BATCH*MAX_BATCHES} embeddings will be done!")
 
 # Embedding shape produced by 1_qwen_generate_embeddings.py.
 # POOL_TOKENS = 1 -> (4096,), N -> (N, 4096). Results land in
@@ -22,7 +28,7 @@ POOL_TOKENS = 1
 
 # "last" (only valid for POOL_TOKENS = 1) or "avg" (valid for every N).
 # Use "avg" throughout when sweeping N, so the runs stay comparable.
-POOLING = "last"
+POOLING = "avg"
 
 # ==============================================================================
 # 2) HPC SETTINGS
@@ -63,8 +69,8 @@ def create_batches():
 
     batches = [jobs[i:i + JOBS_PER_BATCH] for i in range(0, len(jobs), JOBS_PER_BATCH)]
 
-    #batches = [batches[0]]
-    #print("FIXME! Remove this line after debugging. We just use it here to have only a single batch running!")
+    if batches is not None:
+        batches = batches[MAX_BATCHES]
 
     return batches
 
