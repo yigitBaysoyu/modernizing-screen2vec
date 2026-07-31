@@ -54,7 +54,7 @@ Example:
           --projector_model adapter_model_out/best_projector.pth \
           --lora_model adapter_model_out/best_lora_adapter/ \
           --index 3  \  # 0 .. 66260
-          --embeddings_dir embeddings_4096/   \ 
+          --embeddings_dir embeddings_4096_last/   \ 
           [--full-output]
 ```
 
@@ -112,7 +112,7 @@ To reproduce the results that significantly outperform Screen2Vec's Table 3 on t
 ### Pipeline 2
 
 ```bash
-# Step 1-3: Only if you haven't already (you have — embeddings_4096/ exists)
+# Step 1-3: Only if you haven't already (you have — embeddings_4096_last/ exists)
 # python 1_qwen_generate_embeddings.py
 
 # Step 4: NEW — replaces both 5_train_sequence_projector.py AND 8_train_lstm_predictor.py

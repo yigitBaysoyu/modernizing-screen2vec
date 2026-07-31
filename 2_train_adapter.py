@@ -11,6 +11,7 @@
 
 import os
 import json
+import argparse
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -55,7 +56,29 @@ class AdapterConfig:
     grad_accum_steps = 4  # Gradient accumulation steps
 
 
-EMBEDDINGS_DIR = "embeddings_4096"
+EMBEDDINGS_DIR = "embeddings_4096_last"
+OUTPUT_DIR = "adapter_model_out"
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description=(
+            "Train the LLaVA-style adapter (EmbeddingProjector + LoRA) that "
+            "maps Qwen3-VL embeddings to cleaned JSON."
+        )
+    )
+    parser.add_argument(
+        "--embeddings_dir", type=str, default=EMBEDDINGS_DIR,
+        help=f"Directory of .npz embeddings to train on (default: {EMBEDDINGS_DIR}). "
+             "Accepts both (4096,) and (N, 4096) embeddings.",
+    )
+    parser.add_argument(
+        "--output_dir", type=str, default=OUTPUT_DIR,
+        help=f"Where projector and LoRA checkpoints are written "
+             f"(default: {OUTPUT_DIR}). Give each sweep run its own directory "
+             "so the checkpoints do not overwrite each other.",
+    )
+    return parser.parse_args()
 
 
 # =============================================================================
@@ -102,16 +125,30 @@ class EmbeddingProjector(nn.Module):
     def forward(self, qwen_embedding):
         """
         Args:
-            qwen_embedding: [B, qwen_dim] pre-computed Qwen3-VL embeddings.
+            qwen_embedding: [B, qwen_dim] or [B, N, qwen_dim] pre-computed
+                Qwen3-VL embeddings, where N <= num_prefix_tokens.
         Returns:
-            [B, num_prefix_tokens, lm_hidden_dim] virtual prefix token embeddings.
+            [B, P, lm_hidden_dim] virtual prefix token embeddings, where P is
+            N for an [B, N, qwen_dim] input and num_prefix_tokens for a
+            [B, qwen_dim] one.
         """
         if qwen_embedding.dim() == 2:
             # Expand [B, 4096] -> [B, 128, 4096]: each token sees the full embedding
             qwen_embedding = qwen_embedding.unsqueeze(1).expand(-1, self.num_prefix_tokens, -1)
 
-        projected = self.projector(qwen_embedding)  # [B, 128, lm_hidden_dim]
-        positions = torch.arange(self.num_prefix_tokens, device=projected.device)
+        # An [B, N, qwen_dim] embedding already carries N distinct tokens, so it
+        # maps to N prefix tokens directly. The positional table is sized for
+        # num_prefix_tokens, so any N <= that shares one checkpoint layout.
+        seq_len = qwen_embedding.size(1)
+        if seq_len > self.num_prefix_tokens:
+            raise ValueError(
+                f"Embedding carries {seq_len} tokens but the projector was built "
+                f"for at most {self.num_prefix_tokens}. Raise "
+                f"AdapterConfig.num_prefix_tokens to at least {seq_len}."
+            )
+
+        projected = self.projector(qwen_embedding)  # [B, seq_len, lm_hidden_dim]
+        positions = torch.arange(seq_len, device=projected.device)
         return projected + self.prefix_pos(positions)
 
 
@@ -164,17 +201,19 @@ def generate_from_prefix(model, tokenizer, prefix_embeds, max_new_tokens=512):
 # Main Training Pipeline
 # =============================================================================
 def main():
+    args = parse_args()
     cfg = AdapterConfig()
     accelerator = Accelerator(gradient_accumulation_steps=cfg.grad_accum_steps)
     device = accelerator.device
     if accelerator.is_local_main_process:
         print(f"Using device: {device} (Distributed across {accelerator.num_processes} processes)")
+        print(f"Embeddings: {args.embeddings_dir} | Output: {args.output_dir}")
 
     # -------------------------------------------------------------------------
     # 1. Load pre-computed embeddings
     # -------------------------------------------------------------------------
     try:
-        all_embeddings = load_embeddings(embeddings_dir=EMBEDDINGS_DIR)
+        all_embeddings = load_embeddings(embeddings_dir=args.embeddings_dir)
     except Exception as e:
         print(f"Critical error: {e}")
         return
@@ -348,9 +387,11 @@ def main():
                 1, inputs_embeds.size(1), device=device, dtype=torch.long
             )
 
-            # Labels: -100 for prefix (no loss), real IDs for target tokens
+            # Labels: -100 for prefix (no loss), real IDs for target tokens.
+            # The prefix length follows the projector output, which depends on
+            # the embedding shape, so it must not be hardcoded to num_prefix_tokens.
             prefix_labels = torch.full(
-                (1, cfg.num_prefix_tokens), -100, device=device, dtype=torch.long
+                (1, prefix_embeds.size(1)), -100, device=device, dtype=torch.long
             )
             labels = torch.cat([prefix_labels, input_ids], dim=1)
 
@@ -443,7 +484,7 @@ def main():
                 )
 
                 prefix_labels = torch.full(
-                    (1, cfg.num_prefix_tokens),
+                    (1, prefix_embeds.size(1)),
                     -100,
                     device=device,
                     dtype=torch.long,
@@ -487,9 +528,9 @@ def main():
                 print("    [*] New best validation loss! Weights cached in memory.")
 
                 # Automatically save the best model directly to disk
-                os.makedirs("adapter_model_out", exist_ok=True)
-                best_projector_path = "adapter_model_out/best_projector.pth"
-                best_lora_path = "adapter_model_out/best_lora_adapter"
+                os.makedirs(args.output_dir, exist_ok=True)
+                best_projector_path = os.path.join(args.output_dir, "best_projector.pth")
+                best_lora_path = os.path.join(args.output_dir, "best_lora_adapter")
 
                 unwrapped_projector = accelerator.unwrap_model(projector)
                 unwrapped_lm = accelerator.unwrap_model(lm_model)
@@ -533,13 +574,13 @@ def main():
             print("Restored best LoRA weights.")
 
         # Save projector
-        os.makedirs("adapter_model_out", exist_ok=True)
-        projector_path = f"adapter_model_out/projector_{timestamp}.pth"
+        os.makedirs(args.output_dir, exist_ok=True)
+        projector_path = os.path.join(args.output_dir, f"projector_{timestamp}.pth")
         torch.save(unwrapped_projector.state_dict(), projector_path)
         print(f"Saved projector to: {projector_path}")
 
         # Save LoRA adapter (PEFT handles extracting only the LoRA delta weights)
-        lora_path = f"adapter_model_out/lora_adapter_{timestamp}"
+        lora_path = os.path.join(args.output_dir, f"lora_adapter_{timestamp}")
         unwrapped_lm.save_pretrained(lora_path)
         print(f"Saved LoRA adapter to: {lora_path}")
 

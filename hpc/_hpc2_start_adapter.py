@@ -13,6 +13,14 @@ from pathlib import Path
 # How many jobs out of the JOBS array each SLURM array task works on
 JOBS_PER_BATCH = 10000
 
+# Which embeddings to train the adapter on, and where its checkpoints go.
+# Must match the POOL_TOKENS/POOLING used in _hpc1_start_embedding.py:
+#   (1, "last") -> embeddings_4096_last
+#   (N, "avg")  -> embeddings_{N}x4096_avg
+# Give each sweep point its own OUTPUT_DIR so checkpoints do not collide.
+EMBEDDINGS_DIR = "embeddings_4096_last"
+OUTPUT_DIR = "adapter_model_out"
+
 # ==============================================================================
 # 2) HPC SETTINGS
 # ==============================================================================
@@ -150,7 +158,7 @@ pip install -r requirements.txt
 srun python hpc/env.py
 
 # EXECUTE MAIN WORKLOAD
-srun bash 2_train_adapter_amplitude.sh
+srun bash 2_train_adapter_amplitude.sh --embeddings_dir {EMBEDDINGS_DIR} --output_dir {OUTPUT_DIR}
 
 # Copy logs from the submission directory (the first folder) to this task's hpc folder
 cp $SLURM_SUBMIT_DIR/stdout_${{SLURM_ARRAY_JOB_ID}}_${{SLURM_ARRAY_TASK_ID}}.txt hpc/ 2>/dev/null || true

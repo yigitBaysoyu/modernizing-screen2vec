@@ -297,8 +297,8 @@ def main():
         description="Joint end-to-end training of SequenceProjector + LSTMPredictor"
     )
     parser.add_argument(
-        "--raw_embeddings_dir", type=str, default="embeddings_4096",
-        help="Directory with raw 4096-dim Qwen embeddings (default: embeddings_4096)",
+        "--raw_embeddings_dir", type=str, default="embeddings_4096_last",
+        help="Directory with raw 4096-dim Qwen embeddings (default: embeddings_4096_last)",
     )
     parser.add_argument(
         "--traces_dir", type=str,

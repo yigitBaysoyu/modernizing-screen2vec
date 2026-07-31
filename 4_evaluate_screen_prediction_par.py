@@ -599,8 +599,8 @@ def main():
                     "(parallelized version with HPC worker/aggregate modes)"
     )
     parser.add_argument(
-        "--embeddings_dir", type=str, default="embeddings_4096",
-        help="Directory containing .npz embedding files (default: embeddings_4096)",
+        "--embeddings_dir", type=str, default="embeddings_4096_last",
+        help="Directory containing .npz embedding files (default: embeddings_4096_last)",
     )
     parser.add_argument(
         "--traces_dir", type=str,

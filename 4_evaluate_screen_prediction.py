@@ -458,8 +458,8 @@ def main():
         description="Replicate Screen2Vec paper Table 3: GUI Screen Prediction"
     )
     parser.add_argument(
-        "--embeddings_dir", type=str, default="embeddings_4096",
-        help="Directory containing .npz embedding files (default: embeddings_4096)",
+        "--embeddings_dir", type=str, default="embeddings_4096_last",
+        help="Directory containing .npz embedding files (default: embeddings_4096_last)",
     )
     parser.add_argument(
         "--traces_dir", type=str,

@@ -21,7 +21,7 @@
 # Requires:
 #   - Trained projector weights (.pth)
 #   - Trained LoRA adapter directory
-#   - Embeddings directory (embeddings_4096/)
+#   - Embeddings directory (embeddings_4096_last/)
 #   - Raw Rico JSON files for ground-truth comparison
 
 import os
@@ -551,8 +551,8 @@ def main():
         help="Path to trained LoRA adapter directory",
     )
     parser.add_argument(
-        "--embeddings_dir", type=str, default="embeddings_4096",
-        help="Path to embeddings directory (default: embeddings_4096)",
+        "--embeddings_dir", type=str, default="embeddings_4096_last",
+        help="Path to embeddings directory (default: embeddings_4096_last)",
     )
     parser.add_argument(
         "--data_dir", type=str, default="../rico-data/data/layouts",
