@@ -17,7 +17,7 @@ JOBS_PER_BATCH = 250
 MAX_BATCHES = 8
 # Total jobs being run is JOBS_PER_BATCH x MAX_BATCHES if MAX_BATCHES is not None
 
-input(f"Only {JOBS_PER_BATCH} x {MAX_BATCHES} = {JOBS_PER_BATCH*MAX_BATCHES} embeddings will be done!")
+input(f"Only {JOBS_PER_BATCH} x {MAX_BATCHES} = {JOBS_PER_BATCH*MAX_BATCHES} embeddings will be done! (press enter to continue)")
 
 # Embedding shape produced by 1_qwen_generate_embeddings.py.
 # POOL_TOKENS = 1 -> (4096,), N -> (N, 4096). Results land in
