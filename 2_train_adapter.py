@@ -36,8 +36,8 @@ class AdapterConfig:
     # Projector: maps Qwen embedding -> virtual prefix tokens for the LM
     num_prefix_tokens = 128
 
-    # RECOMMENDED: Qwen3.5-2B for complex structural layouts
-    lm_model_id = "Qwen/Qwen3.5-2B"
+    # RECOMMENDED: Qwen3.5-4B for complex structural layouts
+    lm_model_id = "Qwen/Qwen3.5-4B"
 
     # LoRA fine-tuning parameters updated for newer Qwen structural compliance
     lora_r = 16
