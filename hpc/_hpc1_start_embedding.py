@@ -69,8 +69,8 @@ def create_batches():
 
     batches = [jobs[i:i + JOBS_PER_BATCH] for i in range(0, len(jobs), JOBS_PER_BATCH)]
 
-    if batches is not None:
-        batches = batches[MAX_BATCHES]
+    if MAX_BATCHES is not None:
+        batches = batches[:MAX_BATCHES]
 
     return batches
 
