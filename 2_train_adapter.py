@@ -206,6 +206,79 @@ def generate_from_prefix(model, tokenizer, prefix_embeds, max_new_tokens=512):
 
 
 # =============================================================================
+# Dataset preparation (target caching + distributed sharding)
+# =============================================================================
+def build_target_column(embeddings, accelerator):
+    """
+    Pre-computes the cleaned target JSON for every row and drops the rows that
+    cannot serve as a training target.
+
+    Runs before sharding and identically on every rank, for two reasons:
+
+    1.  Correctness under DDP.  Skipping a row inside the training loop makes
+        the number of backward() calls rank-dependent, and every backward()
+        triggers a gradient all-reduce.  A rank that skips one sample more than
+        its peers leaves them blocked in a collective that never completes,
+        which surfaces ten minutes later as an NCCL watchdog timeout rather
+        than as an error at the point of cause.
+    2.  Speed.  process_json_file() re-read and re-parsed each target once per
+        epoch; caching turns num_epochs passes over the dataset into one.
+
+    process_json_file() is deterministic, so every rank derives the same set of
+    surviving rows without any communication.
+    """
+    targets = []
+    keep = []
+    for _, row in tqdm(
+            embeddings.iterrows(),
+            total=len(embeddings),
+            desc="Preparing targets",
+            disable=not accelerator.is_local_main_process,
+    ):
+        try:
+            target_json = process_json_file(row["json-path"], minify=True)
+        except Exception:
+            target_json = None
+
+        usable = bool(target_json) and len(target_json) >= 5
+        keep.append(usable)
+        targets.append(target_json if usable else "")
+
+    prepared = embeddings.copy()
+    prepared["target-json"] = targets
+    prepared = prepared[keep]
+
+    dropped = len(embeddings) - len(prepared)
+    if dropped and accelerator.is_local_main_process:
+        print(f"Dropped {dropped} samples without a usable JSON target.")
+
+    return prepared
+
+
+def shard_for_process(embeddings, accelerator):
+    """
+    Strided shard of `embeddings` for the current rank, with *equal* length on
+    every rank.
+
+    The length is first truncated down to a multiple of num_processes, so all
+    ranks run exactly the same number of forward/backward steps and their
+    gradient all-reduces stay in lockstep.  At most num_processes - 1 samples
+    are dropped per epoch.
+
+    Without this, an uneven split deadlocks: with 40543 training samples over
+    8 ranks, ranks 0-6 get 5068 rows and rank 7 gets 5067, so rank 7 reaches
+    the epoch-end loss reduction while the others are still in the gradient
+    all-reduce of their extra sample.
+
+    Equal shards also make accelerator.reduce(..., "mean") an exact mean over
+    samples instead of an unweighted mean of differently sized per-rank means.
+    """
+    world_size = accelerator.num_processes
+    usable = (len(embeddings) // world_size) * world_size
+    return embeddings.iloc[:usable].iloc[accelerator.process_index::world_size]
+
+
+# =============================================================================
 # Main Training Pipeline
 # =============================================================================
 def main():
@@ -226,6 +299,10 @@ def main():
         print(f"Critical error: {e}")
         return
 
+    # Resolve and cache the target JSON up front, so the per-rank row counts
+    # below cannot diverge later inside the training loop.
+    all_embeddings = build_target_column(all_embeddings, accelerator)
+
     train_size = int(len(all_embeddings) * 0.8)
     train_embeddings = all_embeddings.iloc[:train_size]
     val_embeddings = all_embeddings.iloc[train_size:]
@@ -235,9 +312,14 @@ def main():
             f"and {len(val_embeddings)} for validation."
         )
 
-    # Shard the datasets manually for distributed processes
-    train_embeddings = train_embeddings.iloc[accelerator.process_index::accelerator.num_processes]
-    val_embeddings = val_embeddings.iloc[accelerator.process_index::accelerator.num_processes]
+    # Shard the datasets manually for distributed processes, equal length per rank
+    train_embeddings = shard_for_process(train_embeddings, accelerator)
+    val_embeddings = shard_for_process(val_embeddings, accelerator)
+    if accelerator.is_local_main_process:
+        print(
+            f"Per-rank shard: {len(train_embeddings)} train / "
+            f"{len(val_embeddings)} val across {accelerator.num_processes} processes."
+        )
 
     # -------------------------------------------------------------------------
     # 2. Load small LM + tokenizer
@@ -360,13 +442,9 @@ def main():
                         f"| Loss: {avg_loss:.6f}"
                 ),
         ):
-            # Target: cleaned, minified JSON from the Rico cleaning pipeline
-            try:
-                target_json = process_json_file(row["json-path"], minify=True)
-            except Exception:
-                continue
-            if not target_json or len(target_json) < 5:
-                continue
+            # Target: cleaned, minified JSON, resolved once by build_target_column().
+            # Never skip a row here — that would desynchronise the ranks.
+            target_json = row["target-json"]
 
             # Tokenize target (append EOS so the model learns when to stop)
             target_enc = tokenizer(
@@ -460,14 +538,7 @@ def main():
                     leave=False,
                     disable=not accelerator.is_local_main_process,
             ):
-                try:
-                    target_json = process_json_file(
-                        row["json-path"], minify=True
-                    )
-                except Exception:
-                    continue
-                if not target_json or len(target_json) < 5:
-                    continue
+                target_json = row["target-json"]
 
                 target_enc = tokenizer(
                     target_json + tokenizer.eos_token,
