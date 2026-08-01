@@ -291,7 +291,8 @@ def main():
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    model_dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+    # model_dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+    model_dtype = torch.float32  # sanity check: must match the dtype used in 2_train_adapter.py
     base_model = AutoModelForCausalLM.from_pretrained(
         cfg.lm_model_id,
         torch_dtype=model_dtype,

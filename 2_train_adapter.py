@@ -39,19 +39,22 @@ class AdapterConfig:
 
     # Base LM for training and evaluation. Adapter must be retrained
     # when this changes — LoRA weights are architecture-specific.
-    lm_model_id = "Qwen/Qwen3.5-2B"
+    # lm_model_id = "Qwen/Qwen3.5-2B"
+    lm_model_id = "Qwen/Qwen2.5-1.5B"  # sanity check: state of 926391f (2026-06-23)
 
     # LoRA fine-tuning parameters updated for newer Qwen structural compliance
     lora_r = 16
     lora_alpha = 32
     lora_dropout = 0.05
-    lora_target_modules = ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+    # lora_target_modules = ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+    lora_target_modules = ["q_proj", "v_proj", "k_proj", "o_proj"]  # sanity check: attention only, as in 926391f
 
     # Training hyperparameters
     lr_projector = 1e-4  # Learning rate for the MLP projector
     lr_lora = 2e-5  # Learning rate for LoRA parameters
     num_epochs = 100
-    patience = 5  # Early stopping patience
+    # patience = 5  # Early stopping patience
+    patience = 3  # sanity check: as in 926391f
     max_target_len = 2048  # Max tokens for the target JSON string
     grad_accum_steps = 4  # Gradient accumulation steps
 
@@ -120,7 +123,11 @@ class EmbeddingProjector(nn.Module):
             nn.GELU(),
             nn.Linear(lm_hidden_dim * 2, lm_hidden_dim),
         )
-        self.prefix_pos = nn.Embedding(num_prefix_tokens, lm_hidden_dim)
+        # self.prefix_pos = nn.Embedding(num_prefix_tokens, lm_hidden_dim)
+        # sanity check: 926391f had no positional table. It was added in 8453eda
+        # only because b161f33 had collapsed embeddings to (4096,), where expand()
+        # produces 128 identical copies. With (128, 4096) input the tokens are
+        # already distinct, so it solves a problem that does not exist here.
 
     def forward(self, qwen_embedding):
         """
@@ -148,8 +155,9 @@ class EmbeddingProjector(nn.Module):
             )
 
         projected = self.projector(qwen_embedding)  # [B, seq_len, lm_hidden_dim]
-        positions = torch.arange(seq_len, device=projected.device)
-        return projected + self.prefix_pos(positions)
+        # positions = torch.arange(seq_len, device=projected.device)
+        # return projected + self.prefix_pos(positions)
+        return projected  # sanity check: as in 926391f
 
 
 # =============================================================================
@@ -235,7 +243,8 @@ def main():
     # 2. Load small LM + tokenizer
     # -------------------------------------------------------------------------
     # Load model with bfloat16 if GPU is available to save memory and match native training precision
-    model_dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+    # model_dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+    model_dtype = torch.float32  # sanity check: 926391f trained in float32
 
     with accelerator.main_process_first():
         if accelerator.is_local_main_process:

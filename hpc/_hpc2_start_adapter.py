@@ -18,7 +18,17 @@ JOBS_PER_BATCH = 10000
 #   (1, "last") -> embeddings_4096_last
 #   (N, "avg")  -> embeddings_{N}x4096_avg
 # Give each sweep point its own OUTPUT_DIR so checkpoints do not collide.
-EMBEDDINGS_DIR = "embeddings_4096_last"
+#
+# Currently set up for the sanity check against commit 926391f (2026-06-23):
+# the (128, 4096) avg-pooled embeddings from 2026-06-18, trained with the
+# AdapterConfig of that commit (Qwen2.5-1.5B, float32, attention-only LoRA,
+# patience 3, projector without positional table).
+# EMBEDDINGS_DIR = "embeddings_4096_last"
+EMBEDDINGS_DIR = "embeddings_128x4096_avg"
+
+# Keep this at the default name: hpc/mail.py:80 hardcodes
+# os.path.isdir("adapter_model_out") to decide whether to archive and mail the
+# checkpoints back. Any other name trains fine but silently sends no model.
 OUTPUT_DIR = "adapter_model_out"
 
 # ==============================================================================
