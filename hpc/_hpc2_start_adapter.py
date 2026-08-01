@@ -38,7 +38,12 @@ SCRATCH_ROOT = "/lustre/scratch/sgjolieb-screen2vec" if not platform.system() ==
 PROJECT_NAME = "s2v"
 DATA_DIR_NAME = "rico-data"
 runtarget = "GPU-H200"  # or "gpu-small" / "cpu"
-run_exclusive = False  # or True if you want the entire node
+# run_exclusive = False  # or True if you want the entire node
+# Required for the (128, 4096) embeddings: load_embeddings() casts to float32
+# and every rank holds the full DataFrame before sharding, so 8 ranks need
+# ~850 GB of host RAM (50679 x 128 x 4096 x 4 B = 106 GB each). That fits into
+# the 1.5 TB of an H200 node only if no other job is competing for it.
+run_exclusive = True
 NUM_GPU: int = 8  # 1..4; how many GPUs to reserve per job
 NOW = datetime.now()
 # We define the timestamp once here to ensure all 7 folders share the exact same prefix
