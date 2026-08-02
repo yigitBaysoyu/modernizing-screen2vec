@@ -113,7 +113,7 @@ class EmbeddingProjector(nn.Module):
     Output: [B, num_prefix_tokens, lm_hidden_dim]  (prefix for the LM)
     """
 
-    def __init__(self, qwen_dim, lm_hidden_dim, num_prefix_tokens):
+    def __init__(self, qwen_dim, lm_hidden_dim, num_prefix_tokens, use_prefix_pos=False):
         super().__init__()
         self.num_prefix_tokens = num_prefix_tokens
         self.lm_hidden_dim = lm_hidden_dim
@@ -123,11 +123,16 @@ class EmbeddingProjector(nn.Module):
             nn.GELU(),
             nn.Linear(lm_hidden_dim * 2, lm_hidden_dim),
         )
-        # self.prefix_pos = nn.Embedding(num_prefix_tokens, lm_hidden_dim)
-        # sanity check: 926391f had no positional table. It was added in 8453eda
-        # only because b161f33 had collapsed embeddings to (4096,), where expand()
-        # produces 128 identical copies. With (128, 4096) input the tokens are
-        # already distinct, so it solves a problem that does not exist here.
+        # sanity check: 926391f had no positional table, so training defaults to
+        # use_prefix_pos=False. It was added in 8453eda only because b161f33 had
+        # collapsed embeddings to (4096,), where expand() produces 128 identical
+        # copies. With (128, 4096) input the tokens are already distinct, so it
+        # solves a problem that does not exist here.
+        # The flag stays so that 3_json_reconstruction.py can still load the
+        # checkpoints trained while the table was present.
+        self.use_prefix_pos = use_prefix_pos
+        if use_prefix_pos:
+            self.prefix_pos = nn.Embedding(num_prefix_tokens, lm_hidden_dim)
 
     def forward(self, qwen_embedding):
         """
@@ -155,8 +160,9 @@ class EmbeddingProjector(nn.Module):
             )
 
         projected = self.projector(qwen_embedding)  # [B, seq_len, lm_hidden_dim]
-        # positions = torch.arange(seq_len, device=projected.device)
-        # return projected + self.prefix_pos(positions)
+        if self.use_prefix_pos:
+            positions = torch.arange(seq_len, device=projected.device)
+            return projected + self.prefix_pos(positions)
         return projected  # sanity check: as in 926391f
 
 

@@ -231,6 +231,13 @@ def main():
         "--full-output", action="store_true",
         help="Print only the reconstructed JSON string, suppressing metrics and logs",
     )
+    parser.add_argument(
+        "--lm_model_id", type=str, default=None,
+        help=(
+            "Override the base LM. By default it is read from the LoRA "
+            "checkpoint's adapter_config.json, which is what it was trained on."
+        ),
+    )
 
     args = parser.parse_args()
     
@@ -286,17 +293,54 @@ def main():
     # -------------------------------------------------------------------------
     # 2. Load models
     # -------------------------------------------------------------------------
-    log_info(f"[*] Loading base language model: {cfg.lm_model_id}")
-    tokenizer = AutoTokenizer.from_pretrained(cfg.lm_model_id)
+    # A checkpoint is only loadable by the exact architecture it was trained
+    # with, and AdapterConfig moves between experiments. So take every
+    # architectural decision from the checkpoint itself rather than from cfg.
+    projector_sd = torch.load(args.projector_model, map_location="cpu")
+
+    lm_model_id = args.lm_model_id
+    if lm_model_id is None:
+        adapter_cfg_path = os.path.join(args.lora_model, "adapter_config.json")
+        try:
+            with open(adapter_cfg_path) as f:
+                lm_model_id = json.load(f)["base_model_name_or_path"]
+        except Exception as e:
+            print(
+                f"[-] Error: could not read base model from {adapter_cfg_path}: {e}\n"
+                f"    Pass --lm_model_id explicitly.",
+                file=sys.stderr,
+            )
+            return
+
+    # The projector was saved in the precision it was trained in; matching it
+    # keeps generation numerically identical to validation.
+    model_dtype = projector_sd["projector.0.weight"].dtype
+    ckpt_hidden_dim = projector_sd["projector.2.weight"].shape[0]
+    use_prefix_pos = "prefix_pos.weight" in projector_sd
+    num_prefix_tokens = (
+        projector_sd["prefix_pos.weight"].shape[0]
+        if use_prefix_pos
+        else cfg.num_prefix_tokens
+    )
+
+    log_info(f"[*] Loading base language model: {lm_model_id} ({model_dtype})")
+    tokenizer = AutoTokenizer.from_pretrained(lm_model_id)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    # model_dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
-    model_dtype = torch.float32  # sanity check: must match the dtype used in 2_train_adapter.py
     base_model = AutoModelForCausalLM.from_pretrained(
-        cfg.lm_model_id,
+        lm_model_id,
         torch_dtype=model_dtype,
     )
+
+    if base_model.config.hidden_size != ckpt_hidden_dim:
+        print(
+            f"[-] Error: projector was trained for hidden_size {ckpt_hidden_dim}, "
+            f"but {lm_model_id} has {base_model.config.hidden_size}. The "
+            f"projector and the LoRA adapter come from different runs.",
+            file=sys.stderr,
+        )
+        return
 
     log_info(f"[*] Loading LoRA adapter from: {args.lora_model}")
     lm_model = PeftModel.from_pretrained(base_model, args.lora_model)
@@ -304,16 +348,16 @@ def main():
     lm_model.eval()
 
     lm_hidden_dim = lm_model.config.hidden_size
-    log_info(f"[*] Loading projector from: {args.projector_model}")
-    # Ensure projector parameters match the loaded model's precision
-    model_dtype = next(base_model.parameters()).dtype
-    projector = EmbeddingProjector(
-        cfg.qwen_embed_dim, lm_hidden_dim, cfg.num_prefix_tokens
-    ).to(device)
-    projector.load_state_dict(
-        torch.load(args.projector_model, map_location=device)
+    log_info(
+        f"[*] Loading projector from: {args.projector_model} "
+        f"(prefix_pos={'yes' if use_prefix_pos else 'no'})"
     )
-    projector = projector.to(model_dtype)
+    projector = EmbeddingProjector(
+        cfg.qwen_embed_dim, lm_hidden_dim, num_prefix_tokens,
+        use_prefix_pos=use_prefix_pos,
+    ).to(device)
+    projector.load_state_dict(projector_sd)
+    projector = projector.to(device=device, dtype=model_dtype)
     projector.eval()
 
     # -------------------------------------------------------------------------
