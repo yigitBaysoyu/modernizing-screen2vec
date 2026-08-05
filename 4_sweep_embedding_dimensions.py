@@ -546,8 +546,11 @@ def main():
     run_p.add_argument("--sample_fraction", type=float, default=None,
                        help="NON-RECIPE, quick tests only: evaluate on a "
                             "fraction of traces")
-    run_p.add_argument("--embeddings_dir", type=str, default="embeddings",
-                       help="Directory with the raw Qwen embeddings")
+    run_p.add_argument("--embeddings_dir", type=str,
+                       default="embeddings_4096_last",
+                       help="Directory with the raw pooled Qwen embeddings "
+                            "(1_qwen_generate_embeddings.py naming: "
+                            "embeddings_<shape>_<pooling>)")
     run_p.add_argument("--hidden_dim", type=int, default=RECIPE_HIDDEN_DIM,
                        help="Projector hidden width (recipe default "
                             f"{RECIPE_HIDDEN_DIM}; non-default values are a "

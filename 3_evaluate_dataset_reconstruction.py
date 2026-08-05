@@ -146,18 +146,55 @@ def run_generate(args):
         return
 
     # -------------------------------------------------------------------------
-    # 2. Load models (same procedure as 3_json_reconstruction.py)
+    # 2. Load models (checkpoint-driven, same procedure as
+    #    3_json_reconstruction.py: every architectural decision is read from
+    #    the checkpoint itself, because AdapterConfig moves between
+    #    experiments and a checkpoint only loads into the exact architecture
+    #    it was trained with)
     # -------------------------------------------------------------------------
-    print(f"[*] Loading base language model: {cfg.lm_model_id}")
-    tokenizer = AutoTokenizer.from_pretrained(cfg.lm_model_id)
+    projector_sd = torch.load(args.projector_model, map_location="cpu")
+
+    lm_model_id = args.lm_model_id
+    if lm_model_id is None:
+        adapter_cfg_path = os.path.join(args.lora_model, "adapter_config.json")
+        try:
+            with open(adapter_cfg_path) as f:
+                lm_model_id = json.load(f)["base_model_name_or_path"]
+        except Exception as e:
+            print(
+                f"[-] Error: could not read base model from "
+                f"{adapter_cfg_path}: {e}\n    Pass --lm_model_id explicitly.",
+                file=sys.stderr,
+            )
+            return
+
+    model_dtype = projector_sd["projector.0.weight"].dtype
+    ckpt_hidden_dim = projector_sd["projector.2.weight"].shape[0]
+    use_prefix_pos = "prefix_pos.weight" in projector_sd
+    num_prefix_tokens = (
+        projector_sd["prefix_pos.weight"].shape[0]
+        if use_prefix_pos
+        else cfg.num_prefix_tokens
+    )
+
+    print(f"[*] Loading base language model: {lm_model_id} ({model_dtype})")
+    tokenizer = AutoTokenizer.from_pretrained(lm_model_id)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    model_dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
     base_model = AutoModelForCausalLM.from_pretrained(
-        cfg.lm_model_id,
+        lm_model_id,
         torch_dtype=model_dtype,
     )
+    if base_model.config.hidden_size != ckpt_hidden_dim:
+        print(
+            f"[-] Error: projector was trained for hidden_size "
+            f"{ckpt_hidden_dim}, but {lm_model_id} has "
+            f"{base_model.config.hidden_size}. The projector and the LoRA "
+            f"adapter come from different runs.",
+            file=sys.stderr,
+        )
+        return
 
     print(f"[*] Loading LoRA adapter from: {args.lora_model}")
     lm_model = PeftModel.from_pretrained(base_model, args.lora_model)
@@ -165,15 +202,14 @@ def run_generate(args):
     lm_model.eval()
 
     lm_hidden_dim = lm_model.config.hidden_size
-    print(f"[*] Loading projector from: {args.projector_model}")
-    model_dtype = next(base_model.parameters()).dtype
+    print(f"[*] Loading projector from: {args.projector_model} "
+          f"(prefix_pos={'yes' if use_prefix_pos else 'no'})")
     projector = EmbeddingProjector(
-        cfg.qwen_embed_dim, lm_hidden_dim, cfg.num_prefix_tokens
+        cfg.qwen_embed_dim, lm_hidden_dim, num_prefix_tokens,
+        use_prefix_pos=use_prefix_pos,
     ).to(device)
-    projector.load_state_dict(
-        torch.load(args.projector_model, map_location=device)
-    )
-    projector = projector.to(model_dtype)
+    projector.load_state_dict(projector_sd)
+    projector = projector.to(device=device, dtype=model_dtype)
     projector.eval()
 
     # -------------------------------------------------------------------------
@@ -378,10 +414,16 @@ def main():
                      help="CUDA device id to use (overrides utils.CUDA_VISIBLE_DEVICE)")
     gen.add_argument("--max_tokens", type=int, default=1024,
                      help="Maximum tokens to generate per screen")
-    gen.add_argument("--embeddings_dir", type=str, default="embeddings",
-                     help="Path to embeddings directory")
+    gen.add_argument("--embeddings_dir", type=str,
+                     default="embeddings_4096_last",
+                     help="Path to embeddings directory (accepts both "
+                          "(4096,) and (N, 4096) embeddings; must match the "
+                          "config the adapter was trained on)")
     gen.add_argument("--data_dir", type=str, default=None,
                      help="Path to raw Rico JSON directory (optional)")
+    gen.add_argument("--lm_model_id", type=str, default=None,
+                     help="Override the base LM (default: read from the LoRA "
+                          "checkpoint's adapter_config.json)")
 
     ev = subparsers.add_parser("evaluate", help="Score stored predictions (CPU)")
     ev.add_argument("--tag", type=str, required=True,
