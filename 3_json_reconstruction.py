@@ -29,8 +29,7 @@ from peft import PeftModel
 
 from utils import process_json_file, CUDA_VISIBLE_DEVICE, load_embeddings
 
-# Respect an externally set CUDA_VISIBLE_DEVICES; fall back to utils default.
-os.environ.setdefault("CUDA_VISIBLE_DEVICES", CUDA_VISIBLE_DEVICE)
+os.environ["CUDA_VISIBLE_DEVICES"] = CUDA_VISIBLE_DEVICE
 
 # Import shared components from the training script (which has a leading
 # digit in its filename, so we use importlib).
@@ -69,28 +68,51 @@ def calculate_iou(box_a, box_b):
     return inter / union if union > 0 else 0.0
 
 
+def calculate_levenshtein_distance(s1: str, s2: str) -> int:
+    """Calculate the exact Levenshtein (edit) distance between two strings."""
+    if len(s1) < len(s2):
+        s1, s2 = s2, s1
+
+    if len(s2) == 0:
+        return len(s1)
+
+    previous_row = list(range(len(s2) + 1))
+    for i, c1 in enumerate(s1):
+        current_row = [i + 1] + [0] * len(s2)
+        for j, c2 in enumerate(s2):
+            insertions = previous_row[j + 1] + 1
+            deletions = current_row[j] + 1
+            substitutions = previous_row[j] + (c1 != c2)
+            current_row[j + 1] = min(insertions, deletions, substitutions)
+        previous_row = current_row
+
+    return previous_row[-1]
+
+
 def evaluate_json_quality(pred_str, gt_str):
     """
     Comprehensive evaluation of a generated JSON against ground truth.
 
     Returns a dict of metrics:
-        string_similarity  – SequenceMatcher ratio (0-1)
-        json_valid          – whether the prediction parses as JSON
-        app_match           – app field matches
-        activity_match      – activity field matches
-        component_count_gt  – # components in ground truth (recursive)
-        component_count_pred– # components in prediction (recursive)
-        class_accuracy      – fraction of paired components with matching class
-        avg_iou             – mean bounding-box IoU across paired components
+        string_similarity       – SequenceMatcher ratio (0-1) [Gestalt Pattern Matching]
+        levenshtein_distance    – Edit distance on minified JSONs
+        levenshtein_similarity  – Normalized Levenshtein similarity (0-1)
+        json_valid              – whether the prediction parses as JSON
+        app_match               – app field matches
+        activity_match          – activity field matches
+        component_count_gt      – # components in ground truth (recursive)
+        component_count_pred    – # components in prediction (recursive)
+        class_accuracy          – fraction of paired components with matching class
+        avg_iou                 – mean bounding-box IoU across paired components
     """
     metrics = {}
 
-    # 1. Raw string similarity
+    # 1. Sequence similarity (Gestalt / difflib SequenceMatcher)
     metrics["string_similarity"] = difflib.SequenceMatcher(
         None, pred_str, gt_str
     ).ratio()
 
-    # 2. JSON validity
+    # 2. JSON validity and minified JSON extraction
     pred_data, gt_data = None, None
     try:
         pred_data = json.loads(pred_str)
@@ -100,8 +122,28 @@ def evaluate_json_quality(pred_str, gt_str):
 
     try:
         gt_data = json.loads(gt_str)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, TypeError):
         pass
+
+    # Build minified JSON strings for GT and Prediction (or fallback to raw strings if unparseable)
+    pred_min_str = (
+        json.dumps(pred_data, separators=(",", ":"))
+        if pred_data is not None
+        else pred_str
+    )
+    gt_min_str = (
+        json.dumps(gt_data, separators=(",", ":"))
+        if gt_data is not None
+        else gt_str
+    )
+
+    # 3. Levenshtein Distance & Similarity on minified JSONs
+    lev_dist = calculate_levenshtein_distance(pred_min_str, gt_min_str)
+    max_len = max(len(pred_min_str), len(gt_min_str))
+    lev_sim = 1.0 - (lev_dist / max_len) if max_len > 0 else 1.0
+
+    metrics["levenshtein_distance"] = lev_dist
+    metrics["levenshtein_similarity"] = lev_sim
 
     if not pred_data or not gt_data:
         metrics["app_match"] = False
@@ -112,18 +154,18 @@ def evaluate_json_quality(pred_str, gt_str):
         metrics["avg_iou"] = 0.0
         return metrics
 
-    # 3. App / Activity match
+    # 4. App / Activity match
     metrics["app_match"] = pred_data.get("app") == gt_data.get("app")
     metrics["activity_match"] = pred_data.get("activity") == gt_data.get("activity")
 
-    # 4. Component-level analysis (flatten both trees)
+    # 5. Component-level analysis (flatten both trees)
     pred_comps = flatten_components(pred_data)
     gt_comps = flatten_components(gt_data)
 
     metrics["component_count_pred"] = len(pred_comps)
     metrics["component_count_gt"] = len(gt_comps)
 
-    # 5. Paired comparison (by DFS tree order)
+    # 6. Paired comparison (by DFS tree order)
     min_len = min(len(pred_comps), len(gt_comps))
     if min_len == 0:
         metrics["class_accuracy"] = 0.0
@@ -174,7 +216,7 @@ def main():
         help="Index of the embedding to reconstruct",
     )
     parser.add_argument(
-        "--embeddings_dir", type=str, default="embeddings",
+        "--embeddings_dir", type=str, default="embeddings_4096_last/",
         help="Path to embeddings directory",
     )
     parser.add_argument(
@@ -188,6 +230,13 @@ def main():
     parser.add_argument(
         "--full-output", action="store_true",
         help="Print only the reconstructed JSON string, suppressing metrics and logs",
+    )
+    parser.add_argument(
+        "--lm_model_id", type=str, default=None,
+        help=(
+            "Override the base LM. By default it is read from the LoRA "
+            "checkpoint's adapter_config.json, which is what it was trained on."
+        ),
     )
 
     args = parser.parse_args()
@@ -244,16 +293,54 @@ def main():
     # -------------------------------------------------------------------------
     # 2. Load models
     # -------------------------------------------------------------------------
-    log_info(f"[*] Loading base language model: {cfg.lm_model_id}")
-    tokenizer = AutoTokenizer.from_pretrained(cfg.lm_model_id)
+    # A checkpoint is only loadable by the exact architecture it was trained
+    # with, and AdapterConfig moves between experiments. So take every
+    # architectural decision from the checkpoint itself rather than from cfg.
+    projector_sd = torch.load(args.projector_model, map_location="cpu")
+
+    lm_model_id = args.lm_model_id
+    if lm_model_id is None:
+        adapter_cfg_path = os.path.join(args.lora_model, "adapter_config.json")
+        try:
+            with open(adapter_cfg_path) as f:
+                lm_model_id = json.load(f)["base_model_name_or_path"]
+        except Exception as e:
+            print(
+                f"[-] Error: could not read base model from {adapter_cfg_path}: {e}\n"
+                f"    Pass --lm_model_id explicitly.",
+                file=sys.stderr,
+            )
+            return
+
+    # The projector was saved in the precision it was trained in; matching it
+    # keeps generation numerically identical to validation.
+    model_dtype = projector_sd["projector.0.weight"].dtype
+    ckpt_hidden_dim = projector_sd["projector.2.weight"].shape[0]
+    use_prefix_pos = "prefix_pos.weight" in projector_sd
+    num_prefix_tokens = (
+        projector_sd["prefix_pos.weight"].shape[0]
+        if use_prefix_pos
+        else cfg.num_prefix_tokens
+    )
+
+    log_info(f"[*] Loading base language model: {lm_model_id} ({model_dtype})")
+    tokenizer = AutoTokenizer.from_pretrained(lm_model_id)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    model_dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
     base_model = AutoModelForCausalLM.from_pretrained(
-        cfg.lm_model_id,
+        lm_model_id,
         torch_dtype=model_dtype,
     )
+
+    if base_model.config.hidden_size != ckpt_hidden_dim:
+        print(
+            f"[-] Error: projector was trained for hidden_size {ckpt_hidden_dim}, "
+            f"but {lm_model_id} has {base_model.config.hidden_size}. The "
+            f"projector and the LoRA adapter come from different runs.",
+            file=sys.stderr,
+        )
+        return
 
     log_info(f"[*] Loading LoRA adapter from: {args.lora_model}")
     lm_model = PeftModel.from_pretrained(base_model, args.lora_model)
@@ -261,16 +348,16 @@ def main():
     lm_model.eval()
 
     lm_hidden_dim = lm_model.config.hidden_size
-    log_info(f"[*] Loading projector from: {args.projector_model}")
-    # Ensure projector parameters match the loaded model's precision
-    model_dtype = next(base_model.parameters()).dtype
-    projector = EmbeddingProjector(
-        cfg.qwen_embed_dim, lm_hidden_dim, cfg.num_prefix_tokens
-    ).to(device)
-    projector.load_state_dict(
-        torch.load(args.projector_model, map_location=device)
+    log_info(
+        f"[*] Loading projector from: {args.projector_model} "
+        f"(prefix_pos={'yes' if use_prefix_pos else 'no'})"
     )
-    projector = projector.to(model_dtype)
+    projector = EmbeddingProjector(
+        cfg.qwen_embed_dim, lm_hidden_dim, num_prefix_tokens,
+        use_prefix_pos=use_prefix_pos,
+    ).to(device)
+    projector.load_state_dict(projector_sd)
+    projector = projector.to(device=device, dtype=model_dtype)
     projector.eval()
 
     # -------------------------------------------------------------------------
@@ -361,27 +448,26 @@ def main():
         print(f"{left:<{col_width}} | {right:<{col_width}}")
     print(f"{'-' * 115}\n")
 
+    valid_icon = "Yes" if metrics["json_valid"] else "No"
+    app_icon = "Yes" if metrics["app_match"] else "No"
+    act_icon = "Yes" if metrics["activity_match"] else "No"
+
     print("\n" + "-" * 50)
     print("METRICS:")
     print("-" * 50)
-    valid_icon = "Yes" if metrics["json_valid"] else "No"
-    print(f"JSON Valid               : {valid_icon}")
-    print(
-        f"String Similarity        : {metrics['string_similarity']:.4f} "
-        f"(1.0 = perfect)"
-    )
-    app_icon = "Yes" if metrics["app_match"] else "No"
-    act_icon = "Yes" if metrics["activity_match"] else "No"
-    print(f"App Match                : {app_icon}")
-    print(f"Activity Match           : {act_icon}")
-    print(f"Component Count (GT)     : {metrics['component_count_gt']}")
-    print(f"Component Count (Pred)   : {metrics['component_count_pred']}")
-    print(f"Class Accuracy           : {metrics['class_accuracy']:.4f}")
-    print(
-        f"Average Bounds IoU       : {metrics['avg_iou']:.4f} "
-        f"(1.0 = perfect)"
-    )
-    print(f"Execution Time           : {time.time() - start_time:.2f} seconds")
+    print(f"JSON Valid                         : {valid_icon}")
+    print(f"Sequence Similarity (Gestalt)*     : {metrics['string_similarity']:.4f} ")
+    print(f"Levenshtein Distance (minified)    : {metrics['levenshtein_distance']} ")
+    print(f"Levenshtein Similarity (minified)* : {metrics['levenshtein_similarity']:.4f} ")
+    print(f"App Match                          : {app_icon}")
+    print(f"Activity Match                     : {act_icon}")
+    print(f"Component Count (GT)               : {metrics['component_count_gt']}")
+    print(f"Component Count (Pred)             : {metrics['component_count_pred']}")
+    print(f"Class Accuracy*                    : {metrics['class_accuracy']:.4f}")
+    print(f"Average Bounds IoU*                : {metrics['avg_iou']:.4f}")
+    print("="* 50)
+    print("Note: * indicates that 1.0 is a perfect match.")
+    print(f"Execution Time                     : {time.time() - start_time:.2f} seconds")
     print("=" * 50)
 
 

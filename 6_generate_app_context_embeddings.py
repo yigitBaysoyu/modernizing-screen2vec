@@ -36,7 +36,7 @@ def main():
         help="Output directory for concatenated embeddings",
     )
     parser.add_argument(
-        "--csv_path", type=str, default="../rico-data/data/play_store_metadata/app_details.csv",
+        "--csv_path", type=str, default="../rico-data/data/play_store_metadata/app_details_enriched.csv",
         help="Path to app_details.csv",
     )
     parser.add_argument(
@@ -85,29 +85,12 @@ def main():
     # Build app_text_map
     app_text_map = {}
     for idx, row in df.iterrows():
-        pkg = row.get("App Package Name")
-        name = row.get("Play Store Name")
-        category = row.get("Category")
+        pkg = row.get("App Package Name", "").strip()
+        name = row.get("Play Store Name", "").strip()
+        category = row.get("Category", "").strip()
+        scraped_desc = row.get("gp_description").strip() if not pd.isna(row.get("gp_description")) else ""
+        app_text_map[pkg] = f"{pkg} - {name} - {category} - {scraped_desc}"
 
-        if desc_col and pd.notna(row.get(desc_col)) and str(row.get(desc_col)).strip():
-            text = str(row[desc_col]).strip()
-        else:
-            # Fallback: Name - Category
-            if pd.isna(name) or not str(name).strip():
-                name = ""
-            if pd.isna(category) or not str(category).strip():
-                category = ""
-            if name and category:
-                text = f"{name} - {category}"
-            elif name:
-                text = name
-            elif category:
-                text = category
-            else:
-                text = ""
-
-        if pkg:
-            app_text_map[str(pkg).strip()] = text
 
     print(f"Loaded {len(app_text_map)} app metadata entries.")
 

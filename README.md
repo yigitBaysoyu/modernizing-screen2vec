@@ -47,6 +47,17 @@ python 3_json_reconstruction.py \
   [--max_tokens 1024]
 ```
 
+Example:
+
+```bash
+ python 3_json_reconstruction.py 
+          --projector_model adapter_model_out/best_projector.pth \
+          --lora_model adapter_model_out/best_lora_adapter/ \
+          --index 3  \  # 0 .. 66260
+          --embeddings_dir embeddings_4096_last/   \ 
+          [--full-output]
+```
+
 ### Parameters:
 - `--projector_model`: Path to the trained projector weights (`.pth`) file.
 - `--lora_model`: Path to the trained LoRA adapter directory.
@@ -72,6 +83,8 @@ Important Notes:
 
 To reproduce the results that significantly outperform Screen2Vec's Table 3 on the GUI Screen Prediction task, run the following pipeline sequence:
 
+### Pipeline 1
+
 1. **Train Sequence Projector:**
    Trains a projector network (4096 -> 1024 -> 768) on the raw Qwen3-VL embeddings using InfoNCE loss.
    ```bash
@@ -96,17 +109,25 @@ To reproduce the results that significantly outperform Screen2Vec's Table 3 on t
    python 4_evaluate_screen_prediction.py --embeddings_dir embeddings_seq_768_with_app --lstm_model lstm_predictor_768d.pth
    ```
 
+### Pipeline 2
+
+```bash
+# Step 1-3: Only if you haven't already (you have — embeddings_4096_last/ exists)
+# python 1_qwen_generate_embeddings.py
+
+# Step 4: NEW — replaces both 5_train_sequence_projector.py AND 8_train_lstm_predictor.py
+python 9_train_joint.py --proj_dim 768
+
+# Step 5: Same as before
+python 6_generate_app_context_embeddings.py --embeddings_dir embeddings_seq_768 --output_dir embeddings_seq_768_with_app
+
+# Step 6: Same as before
+python 4_evaluate_screen_prediction.py --embeddings_dir embeddings_seq_768_with_app --lstm_model lstm_predictor_768d.pth
+```
 
 
 TODOs
 - [x] Benchmarken Table 3 stechen.
-- [ ] Dimension sweep: repeat key points (512/768/1024) with multiple seeds for error bars.
-      Single-seed results (dimension_sweep/, 2026-07-10) show saturation around 512-768 and a
-      small dip at 1024 (Top-1: 0.4557@768 vs 0.4484@1024) — currently indistinguishable from
-      run-to-run noise; do NOT interpret the dip as real before seed repeats.
-      Note: sweeping beyond 1024 requires widening the projector hidden layer (default 1024),
-      i.e. a deliberate deviation from the replication recipe — otherwise larger dims are
-      rank-limited to 1024 and the curve flattens by construction.
 - Den User-Centric Context-Dependent Flow als Argument bringen, Icons bereitzustellen und Co un Nutzerinteraktionen einfacher zu machen.
 - Eigene Benchmarks für Reconstruction Quality
 - Evtl. Android in the Wild

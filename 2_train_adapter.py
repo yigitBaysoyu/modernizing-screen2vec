@@ -11,6 +11,7 @@
 
 import os
 import json
+import argparse
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -33,32 +34,54 @@ class AdapterConfig:
     # Qwen3-VL embedding dimension (from step 1_qwen_generate_embeddings.py)
     qwen_embed_dim = 4096
 
-    # Projector: maps the pooled Qwen embedding -> N virtual prefix tokens.
-    # A single pooled vector does not carry 128 tokens' worth of content;
-    # 16 full-vector projections suffice and train much faster.
-    num_prefix_tokens = 16
-    proj_hidden_dim = 2048    # hidden width of the 2-layer MLP connector
+    # Projector: maps Qwen embedding -> virtual prefix tokens for the LM
+    num_prefix_tokens = 128
 
-    # RECOMMENDED: Qwen3.5-4B for complex structural layouts (or Qwen3.5-2B)
-    lm_model_id = "Qwen/Qwen3.5-4B"
+    # Base LM for training and evaluation. Adapter must be retrained
+    # when this changes — LoRA weights are architecture-specific.
+    # lm_model_id = "Qwen/Qwen3.5-2B"
+    lm_model_id = "Qwen/Qwen2.5-1.5B"  # sanity check: state of 926391f (2026-06-23)
 
     # LoRA fine-tuning parameters updated for newer Qwen structural compliance
     lora_r = 16
     lora_alpha = 32
     lora_dropout = 0.05
-    lora_target_modules = ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+    # lora_target_modules = ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+    lora_target_modules = ["q_proj", "v_proj", "k_proj", "o_proj"]  # sanity check: attention only, as in 926391f
 
     # Training hyperparameters
-    lr_projector = 1e-4       # legacy single-stage joint training (this script)
-    lr_projector_stage1 = 1e-3  # stage 1: projector-only alignment, LM frozen
-                                # (LLaVA uses 2e-3 at effective batch 128;
-                                #  scaled down for our smaller batches)
-    lr_projector_stage2 = 2e-5  # stage 2: joint fine-tune (LLaVA stage 2: 2e-5)
-    lr_lora = 2e-5            # Learning rate for LoRA parameters
+    lr_projector = 1e-4  # Learning rate for the MLP projector
+    lr_lora = 2e-5  # Learning rate for LoRA parameters
     num_epochs = 100
-    patience = 3              # Early stopping patience
-    max_target_len = 2048     # Max tokens for the target JSON string
-    grad_accum_steps = 4      # Gradient accumulation steps
+    # patience = 5  # Early stopping patience
+    patience = 3  # sanity check: as in 926391f
+    max_target_len = 2048  # Max tokens for the target JSON string
+    grad_accum_steps = 4  # Gradient accumulation steps
+
+
+EMBEDDINGS_DIR = "embeddings_4096_last"
+OUTPUT_DIR = "adapter_model_out"
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description=(
+            "Train the LLaVA-style adapter (EmbeddingProjector + LoRA) that "
+            "maps Qwen3-VL embeddings to cleaned JSON."
+        )
+    )
+    parser.add_argument(
+        "--embeddings_dir", type=str, default=EMBEDDINGS_DIR,
+        help=f"Directory of .npz embeddings to train on (default: {EMBEDDINGS_DIR}). "
+             "Accepts both (4096,) and (N, 4096) embeddings.",
+    )
+    parser.add_argument(
+        "--output_dir", type=str, default=OUTPUT_DIR,
+        help=f"Where projector and LoRA checkpoints are written "
+             f"(default: {OUTPUT_DIR}). Give each sweep run its own directory "
+             "so the checkpoints do not overwrite each other.",
+    )
+    return parser.parse_args()
 
 
 # =============================================================================
@@ -66,66 +89,81 @@ class AdapterConfig:
 # =============================================================================
 class EmbeddingProjector(nn.Module):
     """
-    Projects one pooled Qwen3-VL embedding vector into a short sequence of
-    virtual prefix tokens in the language model's embedding space.
+    Projects a single Qwen3-VL embedding vector into a sequence of
+    *unique* virtual prefix tokens in the language model's embedding space.
 
-    LLaVA-1.5-style connector (two-layer MLP with GELU), adapted to a single
-    pooled input vector: LLaVA maps each of ~256 distinct patch features to
-    its own token, whereas we fan the FULL 4096-dim vector out into
-    `num_prefix_tokens` tokens via the output layer, so every prefix token
-    is a learned projection of the whole embedding.
+    This is the core "adapter" component, analogous to LLaVA's visual
+    projection layer.  It translates the embedding model's representation
+    into a conditioning signal that the language model can attend to.
 
-    Two constraints the previous design violated (diagnosed 2026-07-10 —
-    constant-prefix mode collapse, decoder ignored the screen entirely):
-      - no slicing of the pooled vector into per-token chunks (a 32-dim
-        slice of an L2-normalised vector carries almost no signal);
-      - no additive positional embedding (its N(0,1) init has norm
-        ~sqrt(D) and drowns the content pathway ~80x).
+    The full 4096-dim embedding is broadcast to each of the
+    `num_prefix_tokens` positions, so every prefix token sees the
+    complete representation.  A learned positional embedding is added
+    per token to differentiate them.
 
-    `out_scale` is a learnable scalar that must be calibrated once at init
-    (see calibrate_out_scale) so prefix tokens start at the same average
-    norm as the LM's own token embeddings; otherwise the LM sees wildly
-    out-of-distribution inputs.
+    Example:
+        projector = EmbeddingProjector(qwen_dim=4096, lm_hidden_dim=896, num_prefix_tokens=128)
 
-    Input:  [B, 4096]  (L2-normalised Qwen3-VL embedding)
+        qwen_embedding = torch.randn(1, 4096)        # one pre-computed Qwen3-VL embedding
+        prefix = projector(qwen_embedding)            # -> [1, 128, 896]
+        # These 128 virtual tokens are prepended to the LM's input sequence.
+        # The LM then generates the cleaned JSON conditioned on them.
+
+    Input:  [B, 4096]  (Qwen3-VL embedding)
     Output: [B, num_prefix_tokens, lm_hidden_dim]  (prefix for the LM)
     """
 
-    def __init__(self, qwen_dim, lm_hidden_dim, num_prefix_tokens,
-                 hidden_dim=None):
+    def __init__(self, qwen_dim, lm_hidden_dim, num_prefix_tokens, use_prefix_pos=False):
         super().__init__()
         self.num_prefix_tokens = num_prefix_tokens
         self.lm_hidden_dim = lm_hidden_dim
-        hidden_dim = hidden_dim or AdapterConfig.proj_hidden_dim
 
-        self.mlp = nn.Sequential(
-            nn.Linear(qwen_dim, hidden_dim),
+        self.projector = nn.Sequential(
+            nn.Linear(qwen_dim, lm_hidden_dim * 2),
             nn.GELU(),
-            nn.Linear(hidden_dim, num_prefix_tokens * lm_hidden_dim),
+            nn.Linear(lm_hidden_dim * 2, lm_hidden_dim),
         )
-        self.out_scale = nn.Parameter(torch.ones(()))
-
-    @torch.no_grad()
-    def calibrate_out_scale(self, sample_embeddings, target_token_norm):
-        """Sets out_scale so initial prefix-token norms match
-        `target_token_norm` (the LM token-embedding mean norm). Call once
-        before training, with the same samples on every rank."""
-        out = self.mlp(sample_embeddings)
-        out = out.view(-1, self.num_prefix_tokens, self.lm_hidden_dim)
-        mean_norm = out.norm(dim=-1).mean().item()
-        self.out_scale.fill_(target_token_norm / max(mean_norm, 1e-8))
+        # sanity check: 926391f had no positional table, so training defaults to
+        # use_prefix_pos=False. It was added in 8453eda only because b161f33 had
+        # collapsed embeddings to (4096,), where expand() produces 128 identical
+        # copies. With (128, 4096) input the tokens are already distinct, so it
+        # solves a problem that does not exist here.
+        # The flag stays so that 3_json_reconstruction.py can still load the
+        # checkpoints trained while the table was present.
+        self.use_prefix_pos = use_prefix_pos
+        if use_prefix_pos:
+            self.prefix_pos = nn.Embedding(num_prefix_tokens, lm_hidden_dim)
 
     def forward(self, qwen_embedding):
         """
         Args:
-            qwen_embedding: [B, qwen_dim] pre-computed Qwen3-VL embeddings.
+            qwen_embedding: [B, qwen_dim] or [B, N, qwen_dim] pre-computed
+                Qwen3-VL embeddings, where N <= num_prefix_tokens.
         Returns:
-            [B, num_prefix_tokens, lm_hidden_dim] virtual prefix token embeddings.
+            [B, P, lm_hidden_dim] virtual prefix token embeddings, where P is
+            N for an [B, N, qwen_dim] input and num_prefix_tokens for a
+            [B, qwen_dim] one.
         """
-        B = qwen_embedding.size(0)
-        out = self.mlp(qwen_embedding)
-        out = out.view(B, self.num_prefix_tokens, self.lm_hidden_dim)
-        return out * self.out_scale
+        if qwen_embedding.dim() == 2:
+            # Expand [B, 4096] -> [B, 128, 4096]: each token sees the full embedding
+            qwen_embedding = qwen_embedding.unsqueeze(1).expand(-1, self.num_prefix_tokens, -1)
+
+        # An [B, N, qwen_dim] embedding already carries N distinct tokens, so it
+        # maps to N prefix tokens directly. The positional table is sized for
+        # num_prefix_tokens, so any N <= that shares one checkpoint layout.
+        seq_len = qwen_embedding.size(1)
+        if seq_len > self.num_prefix_tokens:
+            raise ValueError(
+                f"Embedding carries {seq_len} tokens but the projector was built "
+                f"for at most {self.num_prefix_tokens}. Raise "
+                f"AdapterConfig.num_prefix_tokens to at least {seq_len}."
+            )
+
+        projected = self.projector(qwen_embedding)  # [B, seq_len, lm_hidden_dim]
+        if self.use_prefix_pos:
+            positions = torch.arange(seq_len, device=projected.device)
+            return projected + self.prefix_pos(positions)
+        return projected  # sanity check: as in 926391f
 
 
 # =============================================================================
@@ -174,23 +212,102 @@ def generate_from_prefix(model, tokenizer, prefix_embeds, max_new_tokens=512):
 
 
 # =============================================================================
+# Dataset preparation (target caching + distributed sharding)
+# =============================================================================
+def build_target_column(embeddings, accelerator):
+    """
+    Pre-computes the cleaned target JSON for every row and drops the rows that
+    cannot serve as a training target.
+
+    Runs before sharding and identically on every rank, for two reasons:
+
+    1.  Correctness under DDP.  Skipping a row inside the training loop makes
+        the number of backward() calls rank-dependent, and every backward()
+        triggers a gradient all-reduce.  A rank that skips one sample more than
+        its peers leaves them blocked in a collective that never completes,
+        which surfaces ten minutes later as an NCCL watchdog timeout rather
+        than as an error at the point of cause.
+    2.  Speed.  process_json_file() re-read and re-parsed each target once per
+        epoch; caching turns num_epochs passes over the dataset into one.
+
+    process_json_file() is deterministic, so every rank derives the same set of
+    surviving rows without any communication.
+    """
+    targets = []
+    keep = []
+    for _, row in tqdm(
+            embeddings.iterrows(),
+            total=len(embeddings),
+            desc="Preparing targets",
+            disable=not accelerator.is_local_main_process,
+    ):
+        try:
+            target_json = process_json_file(row["json-path"], minify=True)
+        except Exception:
+            target_json = None
+
+        usable = bool(target_json) and len(target_json) >= 5
+        keep.append(usable)
+        targets.append(target_json if usable else "")
+
+    prepared = embeddings.copy()
+    prepared["target-json"] = targets
+    prepared = prepared[keep]
+
+    dropped = len(embeddings) - len(prepared)
+    if dropped and accelerator.is_local_main_process:
+        print(f"Dropped {dropped} samples without a usable JSON target.")
+
+    return prepared
+
+
+def shard_for_process(embeddings, accelerator):
+    """
+    Strided shard of `embeddings` for the current rank, with *equal* length on
+    every rank.
+
+    The length is first truncated down to a multiple of num_processes, so all
+    ranks run exactly the same number of forward/backward steps and their
+    gradient all-reduces stay in lockstep.  At most num_processes - 1 samples
+    are dropped per epoch.
+
+    Without this, an uneven split deadlocks: with 40543 training samples over
+    8 ranks, ranks 0-6 get 5068 rows and rank 7 gets 5067, so rank 7 reaches
+    the epoch-end loss reduction while the others are still in the gradient
+    all-reduce of their extra sample.
+
+    Equal shards also make accelerator.reduce(..., "mean") an exact mean over
+    samples instead of an unweighted mean of differently sized per-rank means.
+    """
+    world_size = accelerator.num_processes
+    usable = (len(embeddings) // world_size) * world_size
+    return embeddings.iloc[:usable].iloc[accelerator.process_index::world_size]
+
+
+# =============================================================================
 # Main Training Pipeline
 # =============================================================================
 def main():
+    args = parse_args()
     cfg = AdapterConfig()
     accelerator = Accelerator(gradient_accumulation_steps=cfg.grad_accum_steps)
     device = accelerator.device
     if accelerator.is_local_main_process:
         print(f"Using device: {device} (Distributed across {accelerator.num_processes} processes)")
+        print(f"Embeddings: {args.embeddings_dir} | Output: {args.output_dir}")
 
     # -------------------------------------------------------------------------
     # 1. Load pre-computed embeddings
     # -------------------------------------------------------------------------
     try:
-        all_embeddings = load_embeddings("embeddings")
+        all_embeddings = load_embeddings(embeddings_dir=args.embeddings_dir)
     except Exception as e:
         print(f"Critical error: {e}")
         return
+
+    # Resolve and cache the target JSON up front, so the per-rank row counts
+    # below cannot diverge later inside the training loop.
+    all_embeddings = build_target_column(all_embeddings, accelerator)
 
     train_size = int(len(all_embeddings) * 0.8)
     train_embeddings = all_embeddings.iloc[:train_size]
@@ -201,15 +318,21 @@ def main():
             f"and {len(val_embeddings)} for validation."
         )
 
-    # Shard the datasets manually for distributed processes
-    train_embeddings = train_embeddings.iloc[accelerator.process_index::accelerator.num_processes]
-    val_embeddings = val_embeddings.iloc[accelerator.process_index::accelerator.num_processes]
+    # Shard the datasets manually for distributed processes, equal length per rank
+    train_embeddings = shard_for_process(train_embeddings, accelerator)
+    val_embeddings = shard_for_process(val_embeddings, accelerator)
+    if accelerator.is_local_main_process:
+        print(
+            f"Per-rank shard: {len(train_embeddings)} train / "
+            f"{len(val_embeddings)} val across {accelerator.num_processes} processes."
+        )
 
     # -------------------------------------------------------------------------
     # 2. Load small LM + tokenizer
     # -------------------------------------------------------------------------
     # Load model with bfloat16 if GPU is available to save memory and match native training precision
-    model_dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+    # model_dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+    model_dtype = torch.float32  # sanity check: 926391f trained in float32
 
     with accelerator.main_process_first():
         if accelerator.is_local_main_process:
@@ -232,13 +355,21 @@ def main():
                 AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=model_dtype, force_download=True)
                 print(f"{model_id} downloaded successfully after cache clean!")
 
-        tokenizer = AutoTokenizer.from_pretrained(cfg.lm_model_id)
+        # local_files_only=True: the main process has just guaranteed the cache
+        # is fully populated above. Without this flag, every rank still calls
+        # into huggingface_hub's remote-resolution/locking path, and concurrent
+        # lock attempts on a networked filesystem (NFS/Lustre home dirs) can
+        # spuriously fail with "does not appear to have a file named ...".
+        # Forcing local-only reads here skips that path entirely and removes
+        # the race between ranks.
+        tokenizer = AutoTokenizer.from_pretrained(cfg.lm_model_id, local_files_only=True)
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
         lm_model = AutoModelForCausalLM.from_pretrained(
             cfg.lm_model_id,
             torch_dtype=model_dtype,
+            local_files_only=True,
         )
 
     # -------------------------------------------------------------------------
@@ -309,21 +440,17 @@ def main():
 
         # --- TRAINING LOOP ---
         for _, row in tqdm(
-            train_embeddings.iterrows(),
-            total=len(train_embeddings),
-            disable=not accelerator.is_local_main_process,
-            desc=(
-                f"Epoch {epoch + 1}/{cfg.num_epochs} "
-                f"| Loss: {avg_loss:.6f}"
-            ),
+                train_embeddings.iterrows(),
+                total=len(train_embeddings),
+                disable=not accelerator.is_local_main_process,
+                desc=(
+                        f"Epoch {epoch + 1}/{cfg.num_epochs} "
+                        f"| Loss: {avg_loss:.6f}"
+                ),
         ):
-            # Target: cleaned, minified JSON from the Rico cleaning pipeline
-            try:
-                target_json = process_json_file(row["json-path"], minify=True)
-            except Exception:
-                continue
-            if not target_json or len(target_json) < 5:
-                continue
+            # Target: cleaned, minified JSON, resolved once by build_target_column().
+            # Never skip a row here — that would desynchronise the ranks.
+            target_json = row["target-json"]
 
             # Tokenize target (append EOS so the model learns when to stop)
             target_enc = tokenizer(
@@ -353,9 +480,11 @@ def main():
                 1, inputs_embeds.size(1), device=device, dtype=torch.long
             )
 
-            # Labels: -100 for prefix (no loss), real IDs for target tokens
+            # Labels: -100 for prefix (no loss), real IDs for target tokens.
+            # The prefix length follows the projector output, which depends on
+            # the embedding shape, so it must not be hardcoded to num_prefix_tokens.
             prefix_labels = torch.full(
-                (1, cfg.num_prefix_tokens), -100, device=device, dtype=torch.long
+                (1, prefix_embeds.size(1)), -100, device=device, dtype=torch.long
             )
             labels = torch.cat([prefix_labels, input_ids], dim=1)
 
@@ -409,20 +538,13 @@ def main():
 
         with torch.no_grad():
             for _, row in tqdm(
-                val_embeddings.iterrows(),
-                total=len(val_embeddings),
-                desc="Validating",
-                leave=False,
-                disable=not accelerator.is_local_main_process,
+                    val_embeddings.iterrows(),
+                    total=len(val_embeddings),
+                    desc="Validating",
+                    leave=False,
+                    disable=not accelerator.is_local_main_process,
             ):
-                try:
-                    target_json = process_json_file(
-                        row["json-path"], minify=True
-                    )
-                except Exception:
-                    continue
-                if not target_json or len(target_json) < 5:
-                    continue
+                target_json = row["target-json"]
 
                 target_enc = tokenizer(
                     target_json + tokenizer.eos_token,
@@ -448,7 +570,7 @@ def main():
                 )
 
                 prefix_labels = torch.full(
-                    (1, cfg.num_prefix_tokens),
+                    (1, prefix_embeds.size(1)),
                     -100,
                     device=device,
                     dtype=torch.long,
@@ -490,15 +612,15 @@ def main():
             patience_counter = 0
             if accelerator.is_local_main_process:
                 print("    [*] New best validation loss! Weights cached in memory.")
-                
+
                 # Automatically save the best model directly to disk
-                os.makedirs("adapter_model_out", exist_ok=True)
-                best_projector_path = "adapter_model_out/best_projector.pth"
-                best_lora_path = "adapter_model_out/best_lora_adapter"
-                
+                os.makedirs(args.output_dir, exist_ok=True)
+                best_projector_path = os.path.join(args.output_dir, "best_projector.pth")
+                best_lora_path = os.path.join(args.output_dir, "best_lora_adapter")
+
                 unwrapped_projector = accelerator.unwrap_model(projector)
                 unwrapped_lm = accelerator.unwrap_model(lm_model)
-                
+
                 # Save to disk (overwriting the previous best)
                 torch.save(unwrapped_projector.state_dict(), best_projector_path)
                 unwrapped_lm.save_pretrained(best_lora_path)
@@ -538,13 +660,13 @@ def main():
             print("Restored best LoRA weights.")
 
         # Save projector
-        os.makedirs("adapter_model_out", exist_ok=True)
-        projector_path = f"adapter_model_out/projector_{timestamp}.pth"
+        os.makedirs(args.output_dir, exist_ok=True)
+        projector_path = os.path.join(args.output_dir, f"projector_{timestamp}.pth")
         torch.save(unwrapped_projector.state_dict(), projector_path)
         print(f"Saved projector to: {projector_path}")
 
         # Save LoRA adapter (PEFT handles extracting only the LoRA delta weights)
-        lora_path = f"adapter_model_out/lora_adapter_{timestamp}"
+        lora_path = os.path.join(args.output_dir, f"lora_adapter_{timestamp}")
         unwrapped_lm.save_pretrained(lora_path)
         print(f"Saved LoRA adapter to: {lora_path}")
 

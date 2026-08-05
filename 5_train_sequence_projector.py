@@ -271,7 +271,7 @@ def main():
     parser.add_argument("--val_fraction", type=float, default=0.2,
                         help="Fraction of traces sampled each epoch for val loss")
     parser.add_argument(
-        "--embeddings_dir", type=str, default="embeddings_4096",
+        "--embeddings_dir", type=str, default="embeddings_4096_last",
         help="Input embeddings directory",
     )
     parser.add_argument(

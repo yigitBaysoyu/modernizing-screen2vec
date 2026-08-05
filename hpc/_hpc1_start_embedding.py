@@ -11,7 +11,24 @@ from pathlib import Path
 # ==============================================================================
 
 # How many jobs out of the JOBS array each SLURM array task works on
-JOBS_PER_BATCH = 8283
+JOBS_PER_BATCH = 250
+
+# Set to None to run all batches, otherwise set to number of batches to be run (all others are discarded)
+MAX_BATCHES = 8
+# Total jobs being run is JOBS_PER_BATCH x MAX_BATCHES if MAX_BATCHES is not None
+
+input(f"Only {JOBS_PER_BATCH} x {MAX_BATCHES} = {JOBS_PER_BATCH*MAX_BATCHES} embeddings will be done! (press enter to continue)")
+
+# Embedding shape produced by 1_qwen_generate_embeddings.py.
+# POOL_TOKENS = 1 -> (4096,), N -> (N, 4096). Results land in
+# embeddings_4096_{POOLING}/ resp. embeddings_{N}x4096_{POOLING}/ inside
+# each task folder.
+# Supported: 1, 4, 8, 16, 32, 64, 128
+POOL_TOKENS = 1
+
+# "last" (only valid for POOL_TOKENS = 1) or "avg" (valid for every N).
+# Use "avg" throughout when sweeping N, so the runs stay comparable.
+POOLING = "avg"
 
 # ==============================================================================
 # 2) HPC SETTINGS
@@ -52,8 +69,8 @@ def create_batches():
 
     batches = [jobs[i:i + JOBS_PER_BATCH] for i in range(0, len(jobs), JOBS_PER_BATCH)]
 
-    #batches = [batches[0]]
-    #print("FIXME! Remove this line after debugging. We just use it here to have only a single batch running!")
+    if MAX_BATCHES is not None:
+        batches = batches[:MAX_BATCHES]
 
     return batches
 
@@ -152,7 +169,7 @@ pip install -r requirements.txt
 srun python hpc/env.py
 
 # EXECUTE MAIN WORKLOAD
-srun python 1_qwen_generate_embeddings.py job.json
+srun python 1_qwen_generate_embeddings.py job.json --pool-tokens {POOL_TOKENS} --pooling {POOLING}
 
 # Copy logs from the submission directory (the first folder) to this task's hpc folder
 cp $SLURM_SUBMIT_DIR/stdout_${{SLURM_ARRAY_JOB_ID}}_${{SLURM_ARRAY_TASK_ID}}.txt hpc/ 2>/dev/null || true
@@ -193,9 +210,22 @@ def prepare_task_folder(array_id: int, job: dict):
 # 4) MAIN
 # ==============================================================================
 def main():
+    if POOL_TOKENS not in (1, 4, 8, 16, 32, 64, 128):
+        raise ValueError(f"Unsupported POOL_TOKENS: {POOL_TOKENS}")
+    if POOLING == "last" and POOL_TOKENS != 1:
+        raise ValueError(
+            f"POOLING='last' produces a single vector; it cannot be combined "
+            f"with POOL_TOKENS={POOL_TOKENS}. Use POOLING='avg'."
+        )
+
+    shape = "(4096,)" if POOL_TOKENS == 1 else f"({POOL_TOKENS}, 4096)"
+    stem = "4096" if POOL_TOKENS == 1 else f"{POOL_TOKENS}x4096"
+    out_dir = f"embeddings_{stem}_{POOLING}"
+    print(f"Embeddings: pooling={POOLING}, shape={shape}, output={out_dir}/")
+
     batches = create_batches()
     total = len(batches)
-    
+
     if total == 0:
         raise ValueError("No jobs (JOBS) found to submit.")
 
