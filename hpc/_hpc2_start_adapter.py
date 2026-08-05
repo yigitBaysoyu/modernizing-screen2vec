@@ -44,7 +44,8 @@ runtarget = "GPU-H200"  # or "gpu-small" / "cpu"
 # ~850 GB of host RAM (50679 x 128 x 4096 x 4 B = 106 GB each). That fits into
 # the 1.5 TB of an H200 node only if no other job is competing for it.
 run_exclusive = True
-NUM_GPU: int = 8  # 1..4; how many GPUs to reserve per job
+# Must match --gpu_ids/--num_processes in 2_train_adapter_amplitude.sh.
+NUM_GPU: int = 4  # how many GPUs to reserve per job
 NOW = datetime.now()
 # We define the timestamp once here to ensure all 7 folders share the exact same prefix
 NOW_STR = NOW.strftime('%Y-%m-%d-%H-%M-%S')

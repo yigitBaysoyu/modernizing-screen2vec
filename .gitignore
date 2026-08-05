@@ -10,7 +10,8 @@ __pycache__/*
 .DS_Store
 embeddings.csv
 *.png
-/adapter_model_out
+/adapter_model_out*
+/reconstructions*
 
 embeddings/
 embeddings*/
@@ -57,3 +58,4 @@ adapter_model_out_embeddings_8x4096_avg/best_lora_adapter/README.md
 adapter_model_out_embeddings_8x4096_avg/lora_adapter_20260801_034527/adapter_config.json
 adapter_model_out_embeddings_8x4096_avg/lora_adapter_20260801_034527/adapter_model.safetensors
 adapter_model_out_embeddings_8x4096_avg/lora_adapter_20260801_034527/README.md
+/.ipynb_checkpoints
