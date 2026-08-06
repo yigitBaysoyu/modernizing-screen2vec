@@ -12,13 +12,13 @@ from pathlib import Path
 # ==============================================================================
 
 # Model / reconstruction arguments
-PROJECTOR_MODEL = "adapter_model_out/best_projector.pth"
-LORA_MODEL = "adapter_model_out/best_lora_adapter"
-EMBEDDINGS_DIR = "embeddings_4096_last"
+PROJECTOR_MODEL = "adapter_model_out_embeddings_4096_last_2k_qwen2.5-1.5b/best_projector.pth"
+LORA_MODEL = "adapter_model_out_embeddings_4096_last_2k_qwen2.5-1.5b/best_lora_adapter"
+EMBEDDINGS_DIR = "embeddings_4096_last_2k"
 DATA_DIR = "../rico-data/data/layouts"
-OUTPUT_DIR = "reconstructions_qwen3.5-4B"
+OUTPUT_DIR = "reconstructions_4096_last"
 MAX_TOKENS = 1024
-NUM_WORKERS = 8  # One per GPU
+NUM_WORKERS = 1  # One per GPU
 
 # ==============================================================================
 # 2) HPC SETTINGS
@@ -26,9 +26,9 @@ NUM_WORKERS = 8  # One per GPU
 SCRATCH_ROOT = "/lustre/scratch/sgjolieb-screen2vec" if not platform.system() == "Windows" else "C:\\Users\\Jonathan\\Dev"
 PROJECT_NAME = "s2v"
 DATA_DIR_NAME = "rico-data"
-runtarget = "GPU-H200"  # GPU-H200 partition with 8x H200 GPUs
+runtarget = "GPU-BIG"  # GPU-H200 partition with 8x H200 GPUs
 run_exclusive = False  # Need exclusive access to all 8 GPUs
-NUM_GPU: int = 8  # 8 H200 GPUs on the node
+NUM_GPU: int = NUM_WORKERS  # 8 H200 GPUs on the node
 NOW = datetime.now()
 # We define the timestamp once here to ensure the folder has a unique prefix
 NOW_STR = NOW.strftime('%Y-%m-%d-%H-%M-%S')
