@@ -27,7 +27,7 @@ SCRATCH_ROOT = "/lustre/scratch/sgjolieb-screen2vec" if not platform.system() ==
 PROJECT_NAME = "s2v"
 DATA_DIR_NAME = "rico-data"
 runtarget = "GPU-H200"  # GPU-H200 partition with 8x H200 GPUs
-run_exclusive = True  # Need exclusive access to all 8 GPUs
+run_exclusive = False  # Need exclusive access to all 8 GPUs
 NUM_GPU: int = 8  # 8 H200 GPUs on the node
 NOW = datetime.now()
 # We define the timestamp once here to ensure the folder has a unique prefix
