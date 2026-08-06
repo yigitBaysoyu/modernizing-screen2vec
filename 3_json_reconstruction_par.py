@@ -457,20 +457,46 @@ def gpu_worker(worker_id, num_workers, dataset, args):
 
     # Load models
     cfg = AdapterConfig()
-    model_dtype = torch.bfloat16
 
-    print(f"[Worker {worker_id}] Loading base model: {cfg.lm_model_id}")
+    # A checkpoint is only loadable by the exact architecture it was trained
+    # with, and AdapterConfig moves between experiments. So take every
+    # architectural decision from the checkpoint itself rather than from cfg.
+    projector_sd = torch.load(args.projector_model, map_location="cpu")
+
+    model_dtype = projector_sd["projector.0.weight"].dtype
+    ckpt_hidden_dim = projector_sd["projector.2.weight"].shape[0]
+    use_prefix_pos = "prefix_pos.weight" in projector_sd
+    num_prefix_tokens = (
+        projector_sd["prefix_pos.weight"].shape[0]
+        if use_prefix_pos
+        else cfg.num_prefix_tokens
+    )
+
+    lm_model_id = args.lm_model_id
+    if lm_model_id is None:
+        adapter_cfg_path = os.path.join(args.lora_model, "adapter_config.json")
+        with open(adapter_cfg_path) as f:
+            lm_model_id = json.load(f)["base_model_name_or_path"]
+
+    print(f"[Worker {worker_id}] Loading base model: {lm_model_id} ({model_dtype})")
     from transformers import AutoModelForCausalLM, AutoTokenizer
     from peft import PeftModel
 
-    tokenizer = AutoTokenizer.from_pretrained(cfg.lm_model_id)
+    tokenizer = AutoTokenizer.from_pretrained(lm_model_id)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
     base_model = AutoModelForCausalLM.from_pretrained(
-        cfg.lm_model_id,
-        torch_dtype=model_dtype,
+        lm_model_id,
+        dtype=model_dtype,
     )
+
+    if base_model.config.hidden_size != ckpt_hidden_dim:
+        raise RuntimeError(
+            f"projector was trained for hidden_size {ckpt_hidden_dim}, but "
+            f"{lm_model_id} has {base_model.config.hidden_size}. The projector "
+            f"and the LoRA adapter come from different runs."
+        )
 
     print(f"[Worker {worker_id}] Loading LoRA adapter: {args.lora_model}")
     lm_model = PeftModel.from_pretrained(base_model, args.lora_model)
@@ -478,15 +504,17 @@ def gpu_worker(worker_id, num_workers, dataset, args):
     lm_model.eval()
 
     lm_hidden_dim = lm_model.config.hidden_size
-    print(f"[Worker {worker_id}] Loading projector: {args.projector_model}")
-    model_dtype_actual = next(base_model.parameters()).dtype
-    projector = EmbeddingProjector(
-        cfg.qwen_embed_dim, lm_hidden_dim, cfg.num_prefix_tokens
-    ).to(device)
-    projector.load_state_dict(
-        torch.load(args.projector_model, map_location=device)
+    print(
+        f"[Worker {worker_id}] Loading projector: {args.projector_model} "
+        f"(prefix_pos={'yes' if use_prefix_pos else 'no'}, "
+        f"num_prefix_tokens={num_prefix_tokens})"
     )
-    projector = projector.to(model_dtype_actual)
+    projector = EmbeddingProjector(
+        cfg.qwen_embed_dim, lm_hidden_dim, num_prefix_tokens,
+        use_prefix_pos=use_prefix_pos,
+    ).to(device)
+    projector.load_state_dict(projector_sd)
+    projector = projector.to(device=device, dtype=model_dtype)
     projector.eval()
 
     print(f"[Worker {worker_id}] Model loaded. Starting inference on {len(worker_dataset)} elements...")
@@ -502,7 +530,7 @@ def gpu_worker(worker_id, num_workers, dataset, args):
 
     for i, item in enumerate(worker_dataset):
         rico_id, success, elapsed = process_single_element(
-            item, projector, lm_model, tokenizer, cfg, device, model_dtype_actual,
+            item, projector, lm_model, tokenizer, cfg, device, model_dtype,
             args.output_dir, args.max_tokens,
         )
 
@@ -569,6 +597,13 @@ def main():
     parser.add_argument(
         "--output_dir", type=str, default="reconstructions_qwen3.5-4B",
         help="Output directory for reconstructed JSONs and reports",
+    )
+    parser.add_argument(
+        "--lm_model_id", type=str, default=None,
+        help=(
+            "Override the base LM. By default it is read from the LoRA "
+            "checkpoint's adapter_config.json, which is what it was trained on."
+        ),
     )
     args = parser.parse_args()
 
