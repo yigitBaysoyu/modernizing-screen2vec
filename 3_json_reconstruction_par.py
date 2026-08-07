@@ -45,6 +45,11 @@ EmbeddingProjector = _adapter.EmbeddingProjector
 AdapterConfig = _adapter.AdapterConfig
 generate_from_prefix = _adapter.generate_from_prefix
 
+# Token budget used when --max_tokens <= 0 ("unlimited").  Generation still
+# stops at EOS; this is only the ceiling for a degenerate, never-terminating
+# generation, and is far beyond any JSON the model was trained to emit.
+UNLIMITED_TOKEN_BUDGET = 1_000_000
+
 
 # =============================================================================
 # Evaluation Helpers (copied from 3_json_reconstruction.py to keep this
@@ -199,6 +204,39 @@ def evaluate_json_quality(pred_str, gt_str):
     metrics["avg_iou"] = total_iou / min_len
 
     return metrics
+
+
+# =============================================================================
+# Progress Display
+# =============================================================================
+def format_duration(seconds):
+    """Format a duration in seconds as 'HH:MM:SS'."""
+    seconds = int(max(seconds, 0))
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+def format_progress(done, total, successes, failures, elapsed, bar_width=30):
+    """
+    Render a single-line progress indicator:
+
+        [#########---------------------]  312/2000 ( 15.6%) | 310 ok, 2 err |
+        2.41s/item | elapsed 00:12:31 | ETA 01:07:45
+    """
+    frac = done / total if total else 1.0
+    filled = int(round(bar_width * frac))
+    bar = "#" * filled + "-" * (bar_width - filled)
+
+    avg = elapsed / done if done else 0.0
+    eta = (total - done) * avg
+
+    return (
+        f"[{bar}] {done}/{total} ({frac * 100:5.1f}%) | "
+        f"{successes} ok, {failures} err | "
+        f"{avg:.2f}s/item | elapsed {format_duration(elapsed)} | "
+        f"ETA {format_duration(eta)}"
+    )
 
 
 # =============================================================================
@@ -366,7 +404,7 @@ def process_single_element(
             prefix_embeds = projector(latent_vec)
             generated_ids = generate_from_prefix(
                 lm_model, tokenizer, prefix_embeds,
-                max_new_tokens=max_tokens,
+                max_new_tokens=max_tokens if max_tokens > 0 else UNLIMITED_TOKEN_BUDGET,
             )
             pred_json_str = tokenizer.decode(
                 generated_ids[0], skip_special_tokens=True
@@ -523,10 +561,16 @@ def gpu_worker(worker_id, num_workers, dataset, args):
     os.makedirs(args.output_dir, exist_ok=True)
 
     # Process elements
+    n_items = len(worker_dataset)
     successes = 0
     failures = 0
-    total_inference_time = 0.0
     worker_start = time.time()
+
+    # On a terminal the bar is redrawn in place; in a Slurm log file (no TTY)
+    # every update is a separate line, printed only every `progress_every`
+    # elements so the log stays readable.
+    interactive = sys.stdout.isatty()
+    progress_every = max(1, getattr(args, "progress_every", 25))
 
     for i, item in enumerate(worker_dataset):
         rico_id, success, elapsed = process_single_element(
@@ -538,25 +582,27 @@ def gpu_worker(worker_id, num_workers, dataset, args):
             successes += 1
         else:
             failures += 1
-        total_inference_time += elapsed
 
-        # Progress logging every 100 elements
-        if (i + 1) % 100 == 0 or (i + 1) == len(worker_dataset):
-            avg_time = total_inference_time / (i + 1) if (i + 1) > 0 else 0
-            remaining = (len(worker_dataset) - (i + 1)) * avg_time
-            remaining_h = remaining / 3600
-            print(
-                f"[Worker {worker_id}] Progress: {i + 1}/{len(worker_dataset)} "
-                f"({successes} ok, {failures} err) | "
-                f"Avg: {avg_time:.2f}s/item | "
-                f"ETA: {remaining_h:.1f}h"
+        done = i + 1
+        if interactive or done % progress_every == 0 or done == n_items or done == 1:
+            line = format_progress(
+                done, n_items, successes, failures, time.time() - worker_start,
             )
+            if interactive:
+                print(f"\r[Worker {worker_id}] {line}", end="", flush=True)
+            else:
+                print(f"[Worker {worker_id}] {line}", flush=True)
+
+    if interactive:
+        print(flush=True)  # terminate the in-place progress line
 
     worker_elapsed = time.time() - worker_start
     print(
         f"[Worker {worker_id}] DONE. "
         f"{successes} succeeded, {failures} failed. "
-        f"Total time: {worker_elapsed / 3600:.2f}h"
+        f"Total time: {format_duration(worker_elapsed)} "
+        f"({worker_elapsed / 3600:.2f}h)",
+        flush=True,
     )
 
 
@@ -587,12 +633,24 @@ def main():
         help="Path to raw Rico JSON files for ground-truth comparison",
     )
     parser.add_argument(
-        "--max_tokens", type=int, default=1024,
-        help="Maximum tokens to generate per element",
+        "--max_tokens", type=int, default=8192,
+        help=(
+            "Maximum tokens to generate per element. Generation stops at EOS "
+            "anyway; this only caps a degenerate, never-terminating generation. "
+            "Use 0 for an effectively unlimited budget."
+        ),
     )
     parser.add_argument(
         "--num_workers", type=int, default=8,
         help="Number of GPU workers (default: 8, one per GPU)",
+    )
+    parser.add_argument(
+        "--progress_every", type=int, default=25,
+        help=(
+            "Print a progress line every N elements when stdout is not a "
+            "terminal (e.g. a Slurm log). On a terminal the progress bar is "
+            "redrawn after every element."
+        ),
     )
     parser.add_argument(
         "--output_dir", type=str, default="reconstructions_qwen3.5-4B",
@@ -614,8 +672,9 @@ def main():
     print(f"  LoRA model      : {args.lora_model}")
     print(f"  Embeddings dir  : {args.embeddings_dir}")
     print(f"  Data dir        : {args.data_dir}")
-    print(f"  Max tokens      : {args.max_tokens}")
+    print(f"  Max tokens      : {args.max_tokens if args.max_tokens > 0 else 'unlimited'}")
     print(f"  Num workers     : {args.num_workers}")
+    print(f"  Progress every  : {max(1, args.progress_every)} elements")
     print(f"  Output dir      : {args.output_dir}")
     print("=" * 70)
 

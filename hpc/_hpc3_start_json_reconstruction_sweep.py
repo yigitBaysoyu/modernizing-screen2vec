@@ -1,6 +1,5 @@
 import json
 import platform
-import re
 import subprocess
 import shutil
 from datetime import datetime
@@ -13,44 +12,68 @@ from pathlib import Path
 
 # Shared reconstruction arguments (same for every sweep point)
 DATA_DIR = "../rico-data/data/layouts"
-MAX_TOKENS = 1024
-NUM_WORKERS = 8  # One per GPU
+# The training targets were capped at AdapterConfig.max_target_len = 2048 tokens,
+# so a well-behaved generation emits EOS long before this. 8192 is 4x that
+# budget: high enough that no output JSON gets truncated, while still being a
+# hard stop, so a degenerate (never-terminating, repeating) generation cannot
+# wedge the whole job.  Pass 0 for a genuinely unlimited budget.
+MAX_TOKENS = 8192
+NUM_WORKERS = 1  # One GPU per job -> one worker per job
+PROGRESS_EVERY = 25  # Print a progress line every N reconstructed elements
+runtarget = "GPU-BIG"
+
+# ------------------------------------------------------------------------------
+# Sweep points: (embeddings folder, trained adapter folder)
+#
+# Hardcoded on purpose — only the embeddings folders that hold 2000 elements are
+# reconstructed.  Deliberately excluded (full-corpus folders, no 2k adapter):
+#   embeddings_128x4096_avg (50679), embeddings_4096_last (66261),
+#   embeddings_seq_768 (66261), embeddings_seq_768_with_app (66261)
+# ------------------------------------------------------------------------------
+SWEEP_POINTS = [
+    ("embeddings_4096_avg",     "adapter_model_out_embeddings_4096_avg_2k_qwen2.5-1.5b"),
+    ("embeddings_4096_last_2k", "adapter_model_out_embeddings_4096_last_2k_qwen2.5-1.5b"),
+    ("embeddings_4x4096_avg",   "adapter_model_out_embeddings_4x4096_avg_2k_qwen2.5-1.5b"),
+    ("embeddings_8x4096_avg",   "adapter_model_out_embeddings_8x4096_avg_2k_qwen2.5-1.5b"),
+    ("embeddings_16x4096_avg",  "adapter_model_out_embeddings_16x4096_avg_2k_qwen2.5-1.5b"),
+    ("embeddings_32x4096_avg",  "adapter_model_out_embeddings_32x4096_avg_2k_qwen2.5-1.5b"),
+    ("embeddings_64x4096_avg",  "adapter_model_out_embeddings_64x4096_avg_2k_qwen2.5-1.5b"),
+]
 
 
-def discover_sweep_configs():
+def build_sweep_configs():
     """
-    Auto-discover adapter/embeddings pairs to sweep over.
-
-    Looks for `adapter_model_out_embeddings_{N}x4096_avg_*_qwen2.5-1.5b/`
-    folders in the project root and matches each one (by embedding
-    dimension N) to the corresponding `embeddings_{N}x4096_avg/` folder.
+    Turn SWEEP_POINTS into full job configs, skipping any point whose
+    embeddings folder or trained adapter is missing in the project root.
     """
     project_root = Path(__file__).resolve().parent.parent
-    dim_re = re.compile(r"adapter_model_out_embeddings_(\d+)x4096")
-
-    adapter_dirs = sorted(
-        project_root.glob("adapter_model_out_embeddings_*x4096_avg_*qwen2.5-1.5b"),
-        key=lambda p: int(dim_re.match(p.name).group(1)),
-    )
 
     configs = []
-    for adapter_dir in adapter_dirs:
-        dim = int(dim_re.match(adapter_dir.name).group(1))
-        embeddings_dir = f"embeddings_{dim}x4096_avg"
+    for embeddings_dir, adapter_dir in SWEEP_POINTS:
         if not (project_root / embeddings_dir).exists():
-            print(f"[!] Skipping {adapter_dir.name}: no matching {embeddings_dir}/ found")
+            print(f"[!] Skipping {embeddings_dir}: folder not found")
             continue
+
+        adapter_path = project_root / adapter_dir
+        if not (adapter_path / "best_projector.pth").exists() or \
+                not (adapter_path / "best_lora_adapter").exists():
+            print(f"[!] Skipping {embeddings_dir}: {adapter_dir}/ is missing "
+                  f"best_projector.pth or best_lora_adapter")
+            continue
+
+        # embeddings_16x4096_avg -> 16x4096_avg
+        name = embeddings_dir[len("embeddings_"):]
         configs.append({
-            "dim": dim,
-            "projector_model": f"{adapter_dir.name}/best_projector.pth",
-            "lora_model": f"{adapter_dir.name}/best_lora_adapter",
+            "name": name,
+            "projector_model": f"{adapter_dir}/best_projector.pth",
+            "lora_model": f"{adapter_dir}/best_lora_adapter",
             "embeddings_dir": embeddings_dir,
-            "output_dir": f"reconstructions_{dim}x4096_avg",
+            "output_dir": f"reconstructions_{name}",
         })
     return configs
 
 
-SWEEP_CONFIGS = discover_sweep_configs()
+SWEEP_CONFIGS = build_sweep_configs()
 
 # ==============================================================================
 # 2) HPC SETTINGS
@@ -58,9 +81,8 @@ SWEEP_CONFIGS = discover_sweep_configs()
 SCRATCH_ROOT = "/lustre/scratch/sgjolieb-screen2vec" if not platform.system() == "Windows" else "C:\\Users\\Jonathan\\Dev"
 PROJECT_NAME = "s2v"
 DATA_DIR_NAME = "rico-data"
-runtarget = "GPU-H200"  # GPU-H200 partition with 8x H200 GPUs
-run_exclusive = False  # Need exclusive access to all 8 GPUs
-NUM_GPU: int = 8  # 8 H200 GPUs on the node
+run_exclusive = False  # One GPU per job -> share the node with other jobs
+NUM_GPU: int = NUM_WORKERS  # A single GPU per job, for maximum parallelism
 NOW = datetime.now()
 # We define the timestamp once here to ensure the folders share a unique prefix
 NOW_STR = NOW.strftime('%Y-%m-%d-%H-%M-%S')
@@ -139,7 +161,7 @@ def create_master_sbatch_script(path, execution_id, cfg):
     Write out the master start.sh for a single sweep point's reconstruction job.
     """
     script_name = "3_json_reconstruction_par.py"
-    jobname = f"recon_{cfg['dim']}x4096"
+    jobname = f"recon_{cfg['name']}"
     sbatch_header = get_hpc_slurm_directives(jobname)
 
     script_content = f"""#!/bin/bash
@@ -164,15 +186,16 @@ pip install -r requirements.txt
 # Show environment
 srun python hpc/env.py
 
-# EXECUTE MAIN WORKLOAD — multi-GPU parallel JSON reconstruction
-# Sweep point: {cfg['dim']}x4096 embeddings
-srun python {script_name} \\
+# EXECUTE MAIN WORKLOAD - single-GPU JSON reconstruction
+# Sweep point: {cfg['embeddings_dir']}
+srun python -u {script_name} \\
     --projector_model {cfg['projector_model']} \\
     --lora_model {cfg['lora_model']} \\
     --embeddings_dir {cfg['embeddings_dir']} \\
     --data_dir {DATA_DIR} \\
     --max_tokens {MAX_TOKENS} \\
     --num_workers {NUM_WORKERS} \\
+    --progress_every {PROGRESS_EVERY} \\
     --output_dir {cfg['output_dir']}
 
 # Copy merged log from the submission directory to this task's hpc folder
@@ -218,16 +241,16 @@ def main():
         print("[-] No sweep configs discovered. Aborting.")
         return
 
-    print(f"Discovered {len(SWEEP_CONFIGS)} sweep point(s):")
+    print(f"Submitting {len(SWEEP_CONFIGS)} sweep point(s), one single-GPU job each:")
     for cfg in SWEEP_CONFIGS:
-        print(f"  - dim={cfg['dim']:<4} projector={cfg['projector_model']:<55} "
-              f"lora={cfg['lora_model']:<55} embeddings_dir={cfg['embeddings_dir']:<25} "
+        print(f"  - {cfg['name']:<15} projector={cfg['projector_model']:<60} "
+              f"lora={cfg['lora_model']:<60} embeddings_dir={cfg['embeddings_dir']:<25} "
               f"output_dir={cfg['output_dir']}")
     print()
 
     for execution_id, cfg in enumerate(SWEEP_CONFIGS):
         job_config = {
-            "dim": cfg["dim"],
+            "name": cfg["name"],
             "projector_model": cfg["projector_model"],
             "lora_model": cfg["lora_model"],
             "embeddings_dir": cfg["embeddings_dir"],
@@ -235,16 +258,18 @@ def main():
             "output_dir": cfg["output_dir"],
             "max_tokens": MAX_TOKENS,
             "num_workers": NUM_WORKERS,
+            "progress_every": PROGRESS_EVERY,
         }
 
-        print(f"[{execution_id}] Preparing task folder for dim={cfg['dim']}x4096...")
+        print(f"[{execution_id}] Preparing task folder for {cfg['embeddings_dir']}...")
         print(f"  Projector model : {cfg['projector_model']}")
         print(f"  LoRA model      : {cfg['lora_model']}")
         print(f"  Embeddings dir  : {cfg['embeddings_dir']}")
         print(f"  Data dir        : {DATA_DIR}")
         print(f"  Output dir      : {cfg['output_dir']}")
-        print(f"  Max tokens      : {MAX_TOKENS}")
+        print(f"  Max tokens      : {MAX_TOKENS if MAX_TOKENS else 'unlimited'}")
         print(f"  Num workers     : {NUM_WORKERS}")
+        print(f"  Progress every  : {PROGRESS_EVERY} elements")
         print(f"  GPU partition   : {runtarget}")
         print(f"  Num GPUs        : {NUM_GPU}")
         print(f"  Exclusive node  : {run_exclusive}")
@@ -260,7 +285,7 @@ def main():
         submit_sbatch(master_script_path)
 
         print(f"\n{'=' * 60}")
-        print(f"  Job {execution_id} (dim={cfg['dim']}x4096) submitted successfully!")
+        print(f"  Job {execution_id} ({cfg['embeddings_dir']}) submitted successfully!")
         print(f"  Task directory: {task_folder}")
         print(f"  Output will be in: {task_folder / cfg['output_dir']}")
         print(f"{'=' * 60}\n")
