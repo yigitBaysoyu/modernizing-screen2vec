@@ -18,9 +18,9 @@ DATA_DIR = "../rico-data/data/layouts"
 # hard stop, so a degenerate (never-terminating, repeating) generation cannot
 # wedge the whole job.  Pass 0 for a genuinely unlimited budget.
 MAX_TOKENS = 8192
-NUM_WORKERS = 1  # One GPU per job -> one worker per job
+NUM_WORKERS = 8  # One GPU per job -> one worker per job
 PROGRESS_EVERY = 25  # Print a progress line every N reconstructed elements
-runtarget = "GPU-BIG"
+runtarget = "GPU-H200"
 
 # ------------------------------------------------------------------------------
 # Sweep points: (embeddings folder, trained adapter folder)
