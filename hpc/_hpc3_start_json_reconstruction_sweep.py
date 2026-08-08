@@ -241,7 +241,8 @@ def main():
         print("[-] No sweep configs discovered. Aborting.")
         return
 
-    print(f"Submitting {len(SWEEP_CONFIGS)} sweep point(s), one single-GPU job each:")
+    print(f"Submitting {len(SWEEP_CONFIGS)} sweep point(s), "
+          f"one {NUM_GPU}-GPU job each:")
     for cfg in SWEEP_CONFIGS:
         print(f"  - {cfg['name']:<15} projector={cfg['projector_model']:<60} "
               f"lora={cfg['lora_model']:<60} embeddings_dir={cfg['embeddings_dir']:<25} "
