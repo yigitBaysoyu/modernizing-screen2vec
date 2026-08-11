@@ -25,6 +25,36 @@ def zip_folders_with_prefix(directory, prefix):
             zip_files.append(zip_filepath)
     return zip_files
 
+def find_adapter_output_dir():
+    """
+    Locate the checkpoint directory of an adapter training job, or None if this
+    job is not one.
+
+    The directory name is not fixed any more: every sweep point of
+    2_train_adapter.py writes its own (adapter_model_out_embeddings_4096_last_full,
+    ...), so the submitting start script exports $ADAPTER_OUTPUT_DIR and we read
+    it here.  "adapter_model_out" stays as a fallback for jobs submitted with an
+    older start.sh.
+
+    Deliberately no glob over adapter_model_out*: the task folder is a copy of
+    the whole project and usually still carries the checkpoint directories of
+    *previous* runs, so a glob would make every reconstruction/evaluation job
+    mail stale checkpoints back.
+    """
+    explicit = os.environ.get("ADAPTER_OUTPUT_DIR", "").strip()
+    if explicit:
+        if os.path.isdir(explicit):
+            return explicit
+        print(
+            f"ADAPTER_OUTPUT_DIR is set to '{explicit}', but no such directory "
+            f"exists in {os.getcwd()}. No checkpoints will be sent.",
+            file=sys.stderr,
+        )
+        return None
+
+    return "adapter_model_out" if os.path.isdir("adapter_model_out") else None
+
+
 def send_email_with_attachments(subject, body, attachments):
     """Send an email with attachments."""
     # Create the email message
@@ -76,10 +106,11 @@ def main():
         print(f"Could not read output logs: {e}", file=sys.stderr)
         body = "Log files could not be read."
 
-    # Check if this is an adapter training job (meaning adapter_model_out exists)
-    if os.path.isdir("adapter_model_out"):
+    # Check if this is an adapter training job (meaning a checkpoint dir exists)
+    adapter_dir = find_adapter_output_dir()
+    if adapter_dir:
         folder_name = os.path.basename(current_directory)
-        print(f"Detected adapter_model_out directory in {folder_name}. Preparing split bzip2 archive...")
+        print(f"Detected adapter output directory '{adapter_dir}' in {folder_name}. Preparing split bzip2 archive...")
         archive_name = "../model.zip"
         
         # Clean up any existing archives first
@@ -91,10 +122,10 @@ def main():
                     pass
 
         try:
-            # Create split zip archive inside adapter_model_out with highest bzip2 compression, saving to parent directory
+            # Create split zip archive inside the checkpoint dir with highest bzip2 compression, saving to parent directory
             cmd = ["zip", "-s", "25m", "-r", "-9", "-Z", "bzip2", archive_name, "."]
-            print(f"Running command: {' '.join(cmd)}")
-            subprocess.run(cmd, cwd="adapter_model_out", check=True)
+            print(f"Running command: {' '.join(cmd)} (in {adapter_dir})")
+            subprocess.run(cmd, cwd=adapter_dir, check=True)
         except Exception as e:
             print(f"Error creating split bzip2 archive: {e}", file=sys.stderr)
 
@@ -113,7 +144,7 @@ def main():
         print(f"Sending {total_chunks} chunks as individual emails...")
         for idx, chunk in enumerate(all_chunks):
             part_num = idx + 1
-            subject_part = f"{subject} ({folder_name}) - Part {part_num}/{total_chunks}"
+            subject_part = f"{subject} ({folder_name}/{adapter_dir}) - Part {part_num}/{total_chunks}"
             
             # Attach txt_files (logs) only to the first chunk email to avoid duplicating large logs in every email
             if part_num == 1:

@@ -59,3 +59,4 @@ adapter_model_out_embeddings_8x4096_avg/lora_adapter_20260801_034527/adapter_con
 adapter_model_out_embeddings_8x4096_avg/lora_adapter_20260801_034527/adapter_model.safetensors
 adapter_model_out_embeddings_8x4096_avg/lora_adapter_20260801_034527/README.md
 /.ipynb_checkpoints
+/archive

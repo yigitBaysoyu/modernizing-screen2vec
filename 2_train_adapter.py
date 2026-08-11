@@ -123,13 +123,13 @@ class EmbeddingProjector(nn.Module):
             nn.GELU(),
             nn.Linear(lm_hidden_dim * 2, lm_hidden_dim),
         )
-        # sanity check: 926391f had no positional table, so training defaults to
-        # use_prefix_pos=False. It was added in 8453eda only because b161f33 had
-        # collapsed embeddings to (4096,), where expand() produces 128 identical
-        # copies. With (128, 4096) input the tokens are already distinct, so it
-        # solves a problem that does not exist here.
-        # The flag stays so that 3_json_reconstruction.py can still load the
-        # checkpoints trained while the table was present.
+        # Added in 8453eda because b161f33 had collapsed embeddings to (4096,),
+        # where expand() produces num_prefix_tokens identical copies. The table
+        # is what makes those tokens distinguishable again, so it belongs to the
+        # (4096,) case and only to it: with (N, 4096) input the tokens already
+        # differ and 926391f trained fine without one. main() therefore derives
+        # the flag from the embedding shape instead of fixing it here.
+        # 3_json_reconstruction.py detects it from the checkpoint either way.
         self.use_prefix_pos = use_prefix_pos
         if use_prefix_pos:
             self.prefix_pos = nn.Embedding(num_prefix_tokens, lm_hidden_dim)
@@ -309,6 +309,16 @@ def main():
     # below cannot diverge later inside the training loop.
     all_embeddings = build_target_column(all_embeddings, accelerator)
 
+    # Without this the run would "succeed" doing nothing: every loop below is
+    # driven by the DataFrame, so an empty one trains zero steps and still
+    # writes a checkpoint of the untouched initial weights.
+    if len(all_embeddings) == 0:
+        print(
+            f"No usable embedding/JSON pairs in '{args.embeddings_dir}'. "
+            "Nothing to train on."
+        )
+        return
+
     train_size = int(len(all_embeddings) * 0.8)
     train_embeddings = all_embeddings.iloc[:train_size]
     val_embeddings = all_embeddings.iloc[train_size:]
@@ -395,9 +405,22 @@ def main():
         print(f"Model loaded with dtype: {model_dtype}")
 
     lm_hidden_dim = lm_model.config.hidden_size
+    # A (4096,) embedding is expanded into num_prefix_tokens identical copies by
+    # the projector, so it needs the positional table to tell them apart again.
+    # An (N, 4096) one carries N distinct tokens already and trains without it,
+    # as in 926391f. Deriving the flag from the shape reproduces the 2k sweep
+    # exactly: its two (4096,) checkpoints carry prefix_pos.weight, the
+    # (N, 4096) ones do not.
+    use_prefix_pos = all_embeddings["embedding"].iloc[0].ndim == 1
     projector = EmbeddingProjector(
-        cfg.qwen_embed_dim, lm_hidden_dim, cfg.num_prefix_tokens
+        cfg.qwen_embed_dim, lm_hidden_dim, cfg.num_prefix_tokens,
+        use_prefix_pos=use_prefix_pos,
     ).to(model_dtype)
+    if accelerator.is_local_main_process:
+        print(
+            f"Embedding shape: {all_embeddings['embedding'].iloc[0].shape} | "
+            f"prefix_pos table: {'on' if use_prefix_pos else 'off'}"
+        )
 
     proj_params = sum(p.numel() for p in projector.parameters())
     if accelerator.is_local_main_process:

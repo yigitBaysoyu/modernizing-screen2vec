@@ -24,12 +24,12 @@ JOBS_PER_BATCH = 10000
 # AdapterConfig of that commit (Qwen2.5-1.5B, float32, attention-only LoRA,
 # patience 3, projector without positional table).
 # EMBEDDINGS_DIR = "embeddings_4096_last"
-EMBEDDINGS_DIR = "embeddings_128x4096_avg"
+EMBEDDINGS_DIR = "embeddings_4096_last"
 
-# Keep this at the default name: hpc/mail.py:80 hardcodes
-# os.path.isdir("adapter_model_out") to decide whether to archive and mail the
-# checkpoints back. Any other name trains fine but silently sends no model.
-OUTPUT_DIR = "adapter_model_out"
+# Any name works: start.sh exports it as $ADAPTER_OUTPUT_DIR and
+# hpc/mail.py:find_adapter_output_dir() reads it to decide whether to archive
+# and mail the checkpoints back.
+OUTPUT_DIR = f"adapter_model_out_{EMBEDDINGS_DIR}_full"
 
 # ==============================================================================
 # 2) HPC SETTINGS
@@ -179,7 +179,9 @@ srun bash 2_train_adapter_amplitude.sh --embeddings_dir {EMBEDDINGS_DIR} --outpu
 cp $SLURM_SUBMIT_DIR/stdout_${{SLURM_ARRAY_JOB_ID}}_${{SLURM_ARRAY_TASK_ID}}.txt hpc/ 2>/dev/null || true
 cp $SLURM_SUBMIT_DIR/stderr_${{SLURM_ARRAY_JOB_ID}}_${{SLURM_ARRAY_TASK_ID}}.txt hpc/ 2>/dev/null || true
 
-# Finish sending away results
+# Finish sending away results. mail.py chdirs to the task folder and reads
+# ADAPTER_OUTPUT_DIR to find the checkpoints, so OUTPUT_DIR can be named freely.
+export ADAPTER_OUTPUT_DIR="{OUTPUT_DIR}"
 cd hpc && srun python mail.py "${{SLURM_ARRAY_JOB_ID}}_${{SLURM_ARRAY_TASK_ID}}" "${{SLURM_JOB_NAME}}"
 """
 
