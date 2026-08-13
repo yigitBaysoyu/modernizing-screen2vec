@@ -15,7 +15,7 @@ from pathlib import Path
 ADAPTER_FOLDER = "adapter_model_out_embeddings_4096_last_full_qwen2.5-1.5b"
 PROJECTOR_MODEL = f"{ADAPTER_FOLDER}/best_projector.pth"
 LORA_MODEL = f"{ADAPTER_FOLDER}/best_lora_adapter"
-EMBEDDINGS_DIR = "embeddings_4096"
+EMBEDDINGS_DIR = "embeddings_4096_last"
 DATA_DIR = "../rico-data/data/layouts"
 OUTPUT_DIR = f"reconstructions_for_{ADAPTER_FOLDER}"
 MAX_TOKENS = 8092
