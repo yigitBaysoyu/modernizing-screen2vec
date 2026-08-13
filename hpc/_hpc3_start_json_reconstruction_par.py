@@ -12,12 +12,13 @@ from pathlib import Path
 # ==============================================================================
 
 # Model / reconstruction arguments
-PROJECTOR_MODEL = "adapter_model_out_embeddings_4096_last_2k_qwen2.5-1.5b/best_projector.pth"
-LORA_MODEL = "adapter_model_out_embeddings_4096_last_2k_qwen2.5-1.5b/best_lora_adapter"
-EMBEDDINGS_DIR = "embeddings_4096_last_2k"
+ADAPTER_FOLDER = "adapter_model_out_embeddings_4096_last_full_qwen2.5-1.5b"
+PROJECTOR_MODEL = f"{ADAPTER_FOLDER}/best_projector.pth"
+LORA_MODEL = f"{ADAPTER_FOLDER}/best_lora_adapter"
+EMBEDDINGS_DIR = "embeddings_4096"
 DATA_DIR = "../rico-data/data/layouts"
-OUTPUT_DIR = "reconstructions_4096_last"
-MAX_TOKENS = 1024
+OUTPUT_DIR = f"reconstructions_for_{ADAPTER_FOLDER}"
+MAX_TOKENS = 8092
 NUM_WORKERS = 1  # One per GPU
 
 # ==============================================================================
