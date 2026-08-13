@@ -27,7 +27,7 @@ NUM_WORKERS = 8  # One per GPU
 SCRATCH_ROOT = "/lustre/scratch/sgjolieb-screen2vec" if not platform.system() == "Windows" else "C:\\Users\\Jonathan\\Dev"
 PROJECT_NAME = "s2v"
 DATA_DIR_NAME = "rico-data"
-runtarget = "GPU-BIG"  # GPU-H200 partition with 8x H200 GPUs
+runtarget = "GPU-H200"  # GPU-H200 partition with 8x H200 GPUs
 run_exclusive = False  # Need exclusive access to all 8 GPUs
 NUM_GPU: int = NUM_WORKERS  # 8 H200 GPUs on the node
 NOW = datetime.now()
