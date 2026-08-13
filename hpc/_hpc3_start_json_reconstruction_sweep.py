@@ -12,11 +12,16 @@ from pathlib import Path
 
 # Shared reconstruction arguments (same for every sweep point)
 DATA_DIR = "../rico-data/data/layouts"
-# The training targets were capped at AdapterConfig.max_target_len = 2048 tokens,
-# so a well-behaved generation emits EOS long before this. 8192 is 4x that
-# budget: high enough that no output JSON gets truncated, while still being a
-# hard stop, so a degenerate (never-terminating, repeating) generation cannot
-# wedge the whole job.  Pass 0 for a genuinely unlimited budget.
+# The checkpoints this sweep drives were trained back when
+# AdapterConfig.max_target_len was 2048, so a well-behaved generation emits EOS
+# long before this. 8192 is 4x that budget: a hard stop so a degenerate
+# (never-terminating, repeating) generation cannot wedge the whole job.
+# Pass 0 for a genuinely unlimited budget.
+#
+# NOTE: max_target_len is 4096 now.  Re-running this sweep against adapters
+# trained under the current config wants MAX_TOKENS near 4608, as in
+# _hpc3_start_json_reconstruction_par.py -- the 2048..8192 band is empty in
+# practice, so the extra budget only makes runaways more expensive.
 MAX_TOKENS = 8192
 NUM_WORKERS = 8  # One GPU per job -> one worker per job
 PROGRESS_EVERY = 25  # Print a progress line every N reconstructed elements

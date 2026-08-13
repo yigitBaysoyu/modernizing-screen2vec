@@ -55,7 +55,15 @@ class AdapterConfig:
     num_epochs = 100
     # patience = 5  # Early stopping patience
     patience = 3  # sanity check: as in 926391f
-    max_target_len = 2048  # Max tokens for the target JSON string
+    # Max tokens for the target JSON string.  Targets that do not fit are
+    # dropped by build_target_column() rather than truncated -- see the note
+    # there on why truncating them poisons the stop behaviour.
+    #
+    # Measured over all 66,261 cleaned Rico ground truths (Qwen2.5 tokenizer):
+    # p50 617, p90 1788, p95 2268, p99 3360, p99.9 6301, max 158,896 tokens.
+    # 4096 keeps 99.56% of the dataset and costs ~1.03x the training compute of
+    # 2048, because only 7% of the samples are anywhere near the limit.
+    max_target_len = 4096
     grad_accum_steps = 4  # Gradient accumulation steps
 
 
@@ -214,10 +222,38 @@ def generate_from_prefix(model, tokenizer, prefix_embeds, max_new_tokens=512):
 # =============================================================================
 # Dataset preparation (target caching + distributed sharding)
 # =============================================================================
-def build_target_column(embeddings, accelerator):
+def fits_token_budget(target_json, tokenizer, max_target_len):
+    """
+    True if `target_json` plus its EOS token fits within `max_target_len`.
+
+    A string of N characters can never tokenize to more than N tokens, so a
+    target shorter than the budget fits without asking the tokenizer at all.
+    That short-circuit skips roughly half the dataset (median target is ~2.1k
+    characters against a 4096-token budget) and keeps the one-off cost of this
+    pass down.
+    """
+    if len(target_json) + 1 <= max_target_len:
+        return True
+    n_tokens = len(tokenizer(target_json, add_special_tokens=False).input_ids)
+    return n_tokens + 1 <= max_target_len
+
+
+def build_target_column(embeddings, accelerator, tokenizer, max_target_len):
     """
     Pre-computes the cleaned target JSON for every row and drops the rows that
-    cannot serve as a training target.
+    cannot serve as a training target -- either because the JSON is unusable,
+    or because it does not fit in `max_target_len` tokens.
+
+    Dropping the over-long ones matters more than it looks.  The training loop
+    tokenizes `target_json + eos_token` with truncation, and the tokenizer
+    truncates from the right, so an over-long target loses exactly the EOS it
+    was supposed to teach.  Every such sample is a worked example of "generate
+    this far and then keep going", which is precisely the degenerate behaviour
+    that makes reconstruction runs hit the token ceiling and emit invalid JSON.
+    At max_target_len=2048 this affected 4,609 of 66,261 samples (6.96%);
+    at 4096 it would be 290, and dropping them instead removes the failure mode
+    entirely at a *lower* cost than truncating (the longest sequences are also
+    the most expensive ones to train on).
 
     Runs before sharding and identically on every rank, for two reasons:
 
@@ -235,6 +271,8 @@ def build_target_column(embeddings, accelerator):
     """
     targets = []
     keep = []
+    n_unusable = 0
+    n_too_long = 0
     for _, row in tqdm(
             embeddings.iterrows(),
             total=len(embeddings),
@@ -247,6 +285,12 @@ def build_target_column(embeddings, accelerator):
             target_json = None
 
         usable = bool(target_json) and len(target_json) >= 5
+        if not usable:
+            n_unusable += 1
+        elif not fits_token_budget(target_json, tokenizer, max_target_len):
+            usable = False
+            n_too_long += 1
+
         keep.append(usable)
         targets.append(target_json if usable else "")
 
@@ -254,9 +298,15 @@ def build_target_column(embeddings, accelerator):
     prepared["target-json"] = targets
     prepared = prepared[keep]
 
-    dropped = len(embeddings) - len(prepared)
-    if dropped and accelerator.is_local_main_process:
-        print(f"Dropped {dropped} samples without a usable JSON target.")
+    if accelerator.is_local_main_process:
+        if n_unusable:
+            print(f"Dropped {n_unusable} samples without a usable JSON target.")
+        if n_too_long:
+            print(
+                f"Dropped {n_too_long} samples longer than "
+                f"{max_target_len} tokens (truncating them would strip the EOS)."
+            )
+        print(f"Kept {len(prepared)} of {len(embeddings)} samples.")
 
     return prepared
 
@@ -305,41 +355,12 @@ def main():
         print(f"Critical error: {e}")
         return
 
-    # Resolve and cache the target JSON up front, so the per-rank row counts
-    # below cannot diverge later inside the training loop.
-    all_embeddings = build_target_column(all_embeddings, accelerator)
-
-    # Without this the run would "succeed" doing nothing: every loop below is
-    # driven by the DataFrame, so an empty one trains zero steps and still
-    # writes a checkpoint of the untouched initial weights.
-    if len(all_embeddings) == 0:
-        print(
-            f"No usable embedding/JSON pairs in '{args.embeddings_dir}'. "
-            "Nothing to train on."
-        )
-        return
-
-    train_size = int(len(all_embeddings) * 0.8)
-    train_embeddings = all_embeddings.iloc[:train_size]
-    val_embeddings = all_embeddings.iloc[train_size:]
-    if accelerator.is_local_main_process:
-        print(
-            f"Using {len(train_embeddings)} samples for training "
-            f"and {len(val_embeddings)} for validation."
-        )
-
-    # Shard the datasets manually for distributed processes, equal length per rank
-    train_embeddings = shard_for_process(train_embeddings, accelerator)
-    val_embeddings = shard_for_process(val_embeddings, accelerator)
-    if accelerator.is_local_main_process:
-        print(
-            f"Per-rank shard: {len(train_embeddings)} train / "
-            f"{len(val_embeddings)} val across {accelerator.num_processes} processes."
-        )
-
     # -------------------------------------------------------------------------
     # 2. Load small LM + tokenizer
     # -------------------------------------------------------------------------
+    # Loaded before the targets are prepared because build_target_column() needs
+    # the tokenizer to decide which targets fit the token budget.
+    #
     # Load model with bfloat16 if GPU is available to save memory and match native training precision
     # model_dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
     model_dtype = torch.float32  # sanity check: 926391f trained in float32
@@ -383,7 +404,44 @@ def main():
         )
 
     # -------------------------------------------------------------------------
-    # 3. Apply LoRA
+    # 3. Prepare targets, split, and shard
+    # -------------------------------------------------------------------------
+    # Resolve and cache the target JSON up front, so the per-rank row counts
+    # below cannot diverge later inside the training loop.
+    all_embeddings = build_target_column(
+        all_embeddings, accelerator, tokenizer, cfg.max_target_len
+    )
+
+    # Without this the run would "succeed" doing nothing: every loop below is
+    # driven by the DataFrame, so an empty one trains zero steps and still
+    # writes a checkpoint of the untouched initial weights.
+    if len(all_embeddings) == 0:
+        print(
+            f"No usable embedding/JSON pairs in '{args.embeddings_dir}'. "
+            "Nothing to train on."
+        )
+        return
+
+    train_size = int(len(all_embeddings) * 0.8)
+    train_embeddings = all_embeddings.iloc[:train_size]
+    val_embeddings = all_embeddings.iloc[train_size:]
+    if accelerator.is_local_main_process:
+        print(
+            f"Using {len(train_embeddings)} samples for training "
+            f"and {len(val_embeddings)} for validation."
+        )
+
+    # Shard the datasets manually for distributed processes, equal length per rank
+    train_embeddings = shard_for_process(train_embeddings, accelerator)
+    val_embeddings = shard_for_process(val_embeddings, accelerator)
+    if accelerator.is_local_main_process:
+        print(
+            f"Per-rank shard: {len(train_embeddings)} train / "
+            f"{len(val_embeddings)} val across {accelerator.num_processes} processes."
+        )
+
+    # -------------------------------------------------------------------------
+    # 4. Apply LoRA
     # -------------------------------------------------------------------------
     lora_config = LoraConfig(
         task_type=TaskType.CAUSAL_LM,
@@ -397,7 +455,7 @@ def main():
         lm_model.print_trainable_parameters()
 
     # -------------------------------------------------------------------------
-    # 4. Create projector
+    # 5. Create projector
     # -------------------------------------------------------------------------
     # Ensure all components use the model's actual loaded precision
     model_dtype = next(lm_model.parameters()).dtype
@@ -427,7 +485,7 @@ def main():
         print(f"Projector parameters: {proj_params:,}")
 
     # -------------------------------------------------------------------------
-    # 5. Optimizer with separate learning rates
+    # 6. Optimizer with separate learning rates
     # -------------------------------------------------------------------------
     optimizer = torch.optim.AdamW([
         {"params": projector.parameters(), "lr": cfg.lr_projector},
@@ -441,7 +499,7 @@ def main():
     lm_model, projector, optimizer = accelerator.prepare(lm_model, projector, optimizer)
 
     # -------------------------------------------------------------------------
-    # 6. Training loop
+    # 7. Training loop
     # -------------------------------------------------------------------------
     history = {"train_loss": [], "val_loss": []}
     best_val_loss = float("inf")

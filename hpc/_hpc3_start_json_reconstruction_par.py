@@ -18,7 +18,13 @@ LORA_MODEL = f"{ADAPTER_FOLDER}/best_lora_adapter"
 EMBEDDINGS_DIR = "embeddings_4096_last"
 DATA_DIR = "../rico-data/data/layouts"
 OUTPUT_DIR = f"reconstructions_for_{ADAPTER_FOLDER}"
-MAX_TOKENS = 8092
+# Must track AdapterConfig.max_target_len (4096) -- the longest target the
+# adapter is ever trained to finish -- plus a small margin.  Anything beyond
+# that is a degenerate generation no budget can rescue: across 65,927
+# reconstructions from eight adapter variants, only 60 (0.09%) ever terminated
+# between 2048 and 8192 tokens, while runaways ran to the ceiling and produced
+# invalid JSON in every single case.
+MAX_TOKENS = 4608
 NUM_WORKERS = 8  # One per GPU
 
 # ==============================================================================
