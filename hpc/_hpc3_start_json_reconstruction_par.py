@@ -19,7 +19,7 @@ EMBEDDINGS_DIR = "embeddings_4096"
 DATA_DIR = "../rico-data/data/layouts"
 OUTPUT_DIR = f"reconstructions_for_{ADAPTER_FOLDER}"
 MAX_TOKENS = 8092
-NUM_WORKERS = 1  # One per GPU
+NUM_WORKERS = 8  # One per GPU
 
 # ==============================================================================
 # 2) HPC SETTINGS
