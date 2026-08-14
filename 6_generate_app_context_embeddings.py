@@ -48,7 +48,7 @@ def main():
         help="Path to RICO layouts directory",
     )
     parser.add_argument(
-        "--description_col", type=str, default="Description",
+        "--description_col", type=str, default="gp_description",
         help="Column name in the CSV that contains full app descriptions. "
              "If not found, falls back to 'Play Store Name - Category'. "
              "Screen2Vec uses full Play Store descriptions for their 768-dim BERT embedding.",
