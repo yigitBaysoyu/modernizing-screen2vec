@@ -11,7 +11,7 @@ from pathlib import Path
 # ==============================================================================
 
 # How many jobs out of the JOBS array each SLURM array task works on
-JOBS_PER_BATCH = 250
+JOBS_PER_BATCH = 8283
 
 # Set to None to run all batches, otherwise set to number of batches to be run (all others are discarded)
 MAX_BATCHES = 8
