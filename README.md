@@ -83,7 +83,7 @@ Important Notes:
 
 To reproduce the results that significantly outperform Screen2Vec's Table 3 on the GUI Screen Prediction task, run the following pipeline sequence:
 
-### Pipeline 1
+### Pipeline v1
 
 1. **Train Sequence Projector:**
    Trains a projector network (4096 -> 1024 -> 768) on the raw Qwen3-VL embeddings using InfoNCE loss.
@@ -109,7 +109,7 @@ To reproduce the results that significantly outperform Screen2Vec's Table 3 on t
    python 4_evaluate_screen_prediction.py --embeddings_dir embeddings_seq_768_with_app --lstm_model lstm_predictor_768d.pth
    ```
 
-### Pipeline 2
+### Pipeline v2
 
 ```bash
 # Step 1-3: Only if you haven't already (you have — embeddings_4096_last/ exists)
@@ -119,7 +119,7 @@ To reproduce the results that significantly outperform Screen2Vec's Table 3 on t
 python 9_train_joint.py --proj_dim 768
 
 # Step 5: Same as before
-python 6_generate_app_context_embeddings.py --embeddings_dir embeddings_seq_768 --output_dir embeddings_seq_768_with_app
+python 6_generate_app_context_embeddings.py --embeddings_dir embeddings_seq_768 --output_dir embeddings_seq_768_with_app_desc
 
 # Step 6: Same as before
 python 4_evaluate_screen_prediction.py --embeddings_dir embeddings_seq_768_with_app --lstm_model lstm_predictor_768d.pth

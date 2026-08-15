@@ -38,6 +38,14 @@ import time
 import traceback
 from pathlib import Path
 
+# rapidfuzz carries a C implementation of the edit distance.  It is a hard
+# requirement in requirements.txt, but the pure-Python fallback in
+# calculate_levenshtein_distance() keeps the script runnable without it.
+try:
+    from rapidfuzz.distance import Levenshtein as _rapidfuzz_levenshtein
+except ImportError:
+    _rapidfuzz_levenshtein = None
+
 # Import shared components from the training script (which has a leading
 # digit in its filename, so we use importlib).
 _adapter = importlib.import_module("2_train_adapter")
@@ -82,7 +90,23 @@ def calculate_iou(box_a, box_b):
 
 
 def calculate_levenshtein_distance(s1: str, s2: str) -> int:
-    """Calculate the exact Levenshtein (edit) distance between two strings."""
+    """
+    Calculate the exact Levenshtein (edit) distance between two strings.
+
+    The pure-Python fallback is O(len(s1) * len(s2)) *interpreted* operations,
+    and on these inputs that is not a rounding error.  Measured over 15 sampled
+    reconstructions: median 4.6s, mean 13.6s per item, peaking at 114s for a
+    25k-character runaway generation scored against a 10k-character ground
+    truth.  This runs inline in the reconstruction worker loop, so every one of
+    those seconds is a second the GPU spends idle.
+
+    rapidfuzz computes the same quantity -- unit cost for insertion, deletion
+    and substitution -- with a bit-parallel algorithm in C, in single-digit
+    milliseconds, so the metric is unchanged.
+    """
+    if _rapidfuzz_levenshtein is not None:
+        return _rapidfuzz_levenshtein.distance(s1, s2)
+
     if len(s1) < len(s2):
         s1, s2 = s2, s1
 
@@ -474,10 +498,25 @@ def gpu_worker(worker_id, num_workers, dataset, args):
       1. Pins itself to a specific GPU
       2. Loads the full model stack
       3. Processes its contiguous slice of the dataset
+
+    Workers are mapped round-robin onto the available GPUs, so `num_workers`
+    may exceed the GPU count.  Decoding at batch size 1 leaves the device
+    mostly idle -- it is bound by kernel launches and by the CPU-side scoring
+    between generations, not by arithmetic -- so several workers sharing a GPU
+    interleave into each other's gaps instead of competing.  A 1.5B model in
+    float32 is ~6 GB of weights plus a few hundred MB of KV cache, which leaves
+    an H200 with room for far more than the two or three this is meant for.
     """
-    # Pin to specific GPU
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(worker_id)
+    # Pin to a specific GPU (round-robin when oversubscribing).
+    gpu_id = worker_id % max(1, args.num_gpus)
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
     device = torch.device("cuda:0")  # Always cuda:0 since we set CUDA_VISIBLE_DEVICES
+
+    # With several workers per GPU there are more processes than there is CPU
+    # work to spread, and torch's default intra-op pool (one thread per visible
+    # core) would have every one of them fan out across the whole node.  Nothing
+    # here is a parallel CPU tensor op; the host side is a launch loop.
+    torch.set_num_threads(1)
 
     # Compute this worker's slice
     total = len(dataset)
@@ -486,7 +525,7 @@ def gpu_worker(worker_id, num_workers, dataset, args):
     end_idx = min(start_idx + chunk_size, total)
     worker_dataset = dataset[start_idx:end_idx]
 
-    print(f"[Worker {worker_id}] GPU {worker_id} | Elements {start_idx}–{end_idx - 1} "
+    print(f"[Worker {worker_id}] GPU {gpu_id} | Elements {start_idx}–{end_idx - 1} "
           f"({len(worker_dataset)} of {total})")
 
     if not worker_dataset:
@@ -539,6 +578,14 @@ def gpu_worker(worker_id, num_workers, dataset, args):
     print(f"[Worker {worker_id}] Loading LoRA adapter: {args.lora_model}")
     lm_model = PeftModel.from_pretrained(base_model, args.lora_model)
     lm_model.to(device)
+
+    # Fold the LoRA deltas into the base weights.  An unmerged PeftModel keeps
+    # every adapted projection wrapped in a Python module that runs two extra
+    # small matmuls per call -- roughly 200 of them per decoded token here.
+    # That is negligible arithmetic and a large amount of host-side work in a
+    # loop that is already launch-bound.  Merging is exact up to float rounding
+    # (W + BA * scaling), so reconstructions may differ in the last bits.
+    lm_model = lm_model.merge_and_unload()
     lm_model.eval()
 
     lm_hidden_dim = lm_model.config.hidden_size
@@ -642,7 +689,18 @@ def main():
     )
     parser.add_argument(
         "--num_workers", type=int, default=8,
-        help="Number of GPU workers (default: 8, one per GPU)",
+        help=(
+            "Number of worker processes. May exceed --num_gpus; workers are "
+            "assigned to GPUs round-robin. Batch-size-1 decoding does not "
+            "saturate a GPU, so 2-3 workers per GPU is usually faster than 1."
+        ),
+    )
+    parser.add_argument(
+        "--num_gpus", type=int, default=0,
+        help=(
+            "Number of GPUs to spread the workers over. 0 (default) "
+            "auto-detects via torch.cuda.device_count()."
+        ),
     )
     parser.add_argument(
         "--progress_every", type=int, default=25,
@@ -665,6 +723,12 @@ def main():
     )
     args = parser.parse_args()
 
+    # Resolve the GPU count once, in the parent, so every worker agrees on the
+    # round-robin mapping.  The workers cannot do this themselves: they set
+    # CUDA_VISIBLE_DEVICES before touching CUDA and would each see one device.
+    if args.num_gpus <= 0:
+        args.num_gpus = max(1, torch.cuda.device_count())
+
     print("=" * 70)
     print("  Parallelized JSON Reconstruction (Multi-GPU)")
     print("=" * 70)
@@ -674,6 +738,8 @@ def main():
     print(f"  Data dir        : {args.data_dir}")
     print(f"  Max tokens      : {args.max_tokens if args.max_tokens > 0 else 'unlimited'}")
     print(f"  Num workers     : {args.num_workers}")
+    print(f"  Num GPUs        : {args.num_gpus} "
+          f"({args.num_workers / args.num_gpus:.1f} workers/GPU)")
     print(f"  Progress every  : {max(1, args.progress_every)} elements")
     print(f"  Output dir      : {args.output_dir}")
     print("=" * 70)

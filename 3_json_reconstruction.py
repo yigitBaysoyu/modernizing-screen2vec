@@ -27,6 +27,13 @@ import time
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import PeftModel
 
+# See calculate_levenshtein_distance() below; kept optional so the script still
+# runs in an environment where rapidfuzz is missing.
+try:
+    from rapidfuzz.distance import Levenshtein as _rapidfuzz_levenshtein
+except ImportError:
+    _rapidfuzz_levenshtein = None
+
 from utils import process_json_file, CUDA_VISIBLE_DEVICE, load_embeddings
 
 os.environ["CUDA_VISIBLE_DEVICES"] = CUDA_VISIBLE_DEVICE
@@ -69,7 +76,17 @@ def calculate_iou(box_a, box_b):
 
 
 def calculate_levenshtein_distance(s1: str, s2: str) -> int:
-    """Calculate the exact Levenshtein (edit) distance between two strings."""
+    """
+    Calculate the exact Levenshtein (edit) distance between two strings.
+
+    The pure-Python fallback below is O(len(s1) * len(s2)) interpreted
+    operations, which costs seconds to minutes per item on these JSONs.
+    rapidfuzz computes the same quantity -- unit cost for insertion, deletion
+    and substitution -- in C, so the reported metric is unchanged.
+    """
+    if _rapidfuzz_levenshtein is not None:
+        return _rapidfuzz_levenshtein.distance(s1, s2)
+
     if len(s1) < len(s2):
         s1, s2 = s2, s1
 

@@ -177,21 +177,39 @@ class EmbeddingProjector(nn.Module):
 # =============================================================================
 # Autoregressive Generation with KV-Cache
 # =============================================================================
-def generate_from_prefix(model, tokenizer, prefix_embeds, max_new_tokens=512):
+def generate_from_prefix(
+    model, tokenizer, prefix_embeds, max_new_tokens=512, eos_check_every=16
+):
     """
     Autoregressively generate tokens conditioned on prefix embeddings.
     Uses KV-caching for efficient O(n) generation.
 
     Args:
-        model:          The (LoRA-wrapped) causal LM.
-        tokenizer:      The LM's tokenizer (for EOS detection).
-        prefix_embeds:  [B, num_prefix, hidden_dim] projected prefix embeddings.
-        max_new_tokens: Maximum number of tokens to generate.
+        model:           The (LoRA-wrapped) causal LM.
+        tokenizer:       The LM's tokenizer (for EOS detection).
+        prefix_embeds:   [B, num_prefix, hidden_dim] projected prefix embeddings.
+        max_new_tokens:  Maximum number of tokens to generate.
+        eos_check_every: How many decode steps to run between EOS checks.  See
+                         below -- this is a throughput knob, not a semantic one.
 
     Returns:
-        generated_ids: [B, generated_len] tensor of generated token IDs.
+        generated_ids: [B, generated_len] tensor of generated token IDs,
+                       truncated after the first position where every sequence
+                       emitted EOS.
+
+    Reading the sampled token back on the host is the single most expensive
+    thing this loop can do.  `next_token` lives on the GPU, so testing it in a
+    Python `if` forces a device synchronisation, and a sync every step means
+    the CPU can never queue the next step's kernels while the current one runs.
+    At batch size 1 a 1.5B model launches far more kernels than it does real
+    arithmetic, so that serialisation -- not the matmuls -- sets the pace.
+
+    Checking every `eos_check_every` steps instead lets the launch queue stay
+    ahead of the device.  The cost is that generation can overshoot EOS by up
+    to `eos_check_every - 1` tokens; the truncation at the end removes them, so
+    the returned tensor is identical to what a per-step check would produce.
     """
-    device = prefix_embeds.device
+    eos_token_id = tokenizer.eos_token_id
 
     # First forward pass: process all prefix embeddings, populate KV cache
     outputs = model(inputs_embeds=prefix_embeds, use_cache=True)
@@ -200,11 +218,16 @@ def generate_from_prefix(model, tokenizer, prefix_embeds, max_new_tokens=512):
     next_token = torch.argmax(next_token_logits, dim=-1, keepdim=True)
 
     generated = [next_token]
+    steps_since_check = 1
 
     # Subsequent passes: single token at a time with cached KV
     for _ in range(max_new_tokens - 1):
-        if (next_token == tokenizer.eos_token_id).all():
-            break
+        if steps_since_check >= eos_check_every:
+            # One sync per `eos_check_every` steps instead of one per step.
+            window = torch.cat(generated[-steps_since_check:], dim=1)
+            if (window == eos_token_id).all(dim=0).any():
+                break
+            steps_since_check = 0
 
         outputs = model(
             input_ids=next_token,
@@ -215,8 +238,17 @@ def generate_from_prefix(model, tokenizer, prefix_embeds, max_new_tokens=512):
         next_token_logits = outputs.logits[:, -1, :]
         next_token = torch.argmax(next_token_logits, dim=-1, keepdim=True)
         generated.append(next_token)
+        steps_since_check += 1
 
-    return torch.cat(generated, dim=1)
+    generated_ids = torch.cat(generated, dim=1)
+
+    # Drop whatever was generated past the first all-sequences-EOS position.
+    # `.all(dim=0)` mirrors the batch semantics of the original per-step check.
+    eos_positions = (generated_ids == eos_token_id).all(dim=0).nonzero()
+    if eos_positions.numel() > 0:
+        generated_ids = generated_ids[:, : eos_positions[0].item() + 1]
+
+    return generated_ids
 
 
 # =============================================================================
