@@ -29,6 +29,29 @@ Our goal is to create better screens than the original authors could with their 
 
 - All embeddings and adapter training needs to be redone, when the JSON processing code is touched!
 
+## Generating Several Embedding Shapes at Once
+
+`1_qwen_generate_embeddings.py` takes several `--pool-tokens` values. They are all
+pooled out of the *same* forward pass and written to their own directory, so a
+sweep over N costs one inference run rather than one per N:
+
+```bash
+python 1_qwen_generate_embeddings.py job.json --pool-tokens 2 4 8 16 32 64 --pooling avg
+# -> embeddings_2x4096_avg/ ... embeddings_64x4096_avg/
+```
+
+The shapes are *not* derivable from one another afterwards: `adaptive_avg_pool1d`
+puts its bucket borders at `floor(i*L/N)` / `ceil((i+1)*L/N)`, which only line up
+between two N when the valid sequence length divides evenly, and each bucket is
+L2-normalized individually on top. So they have to be taken from the live hidden
+states, which is what a multi-value `--pool-tokens` does.
+
+Add `--skip-existing` to resume a run that hit its wall time; it skips screens
+whose `.npz` already exists in *every* target directory.
+
+On the cluster, set `POOL_TOKENS` in `hpc/_hpc1_start_embedding.py` to the list
+of N you want and submit once.
+
 ## Process Sketch
 
 ![](assets/process-draft.png)
