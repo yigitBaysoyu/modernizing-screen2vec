@@ -394,8 +394,7 @@ def main():
     # the tokenizer to decide which targets fit the token budget.
     #
     # Load model with bfloat16 if GPU is available to save memory and match native training precision
-    # model_dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
-    model_dtype = torch.float32  # sanity check: 926391f trained in float32
+    model_dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
 
     with accelerator.main_process_first():
         if accelerator.is_local_main_process:
