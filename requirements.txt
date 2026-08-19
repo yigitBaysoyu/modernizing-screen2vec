@@ -15,3 +15,4 @@ peft
 accelerate
 scikit-learn
 rapidfuzz
+optree>=0.13.0
