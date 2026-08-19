@@ -10,15 +10,18 @@
 #                     and write per-screen metrics (CSV) plus an aggregate
 #                     report (headline table + complexity breakdown).
 #
-# The validation split matches 2_train_adapter.py exactly: the first 80% of
-# the (numerically sorted) embeddings are training data, the rest validation.
+# The validation split matches 2_train_adapter.py exactly: rows the trainer
+# drops in build_target_column() (unusable JSONs, targets over
+# AdapterConfig.max_target_len tokens) are filtered out first, then the first
+# 80% of the remaining (numerically sorted) embeddings are training data, the
+# rest validation.
 #
 # Usage:
 #   python 3_evaluate_dataset_reconstruction.py generate \
 #       --projector_model adapter_model_out/best_projector.pth \
 #       --lora_model adapter_model_out/best_lora_adapter \
 #       --tag adapter-v2 [--num_samples 1000 | --full] [--batch_size 32] \
-#       [--gpu 0] [--seed 42] [--max_tokens 1024]
+#       [--gpu 0] [--seed 42] [--max_tokens 4096]
 #
 #   python 3_evaluate_dataset_reconstruction.py evaluate --tag adapter-v2
 
@@ -32,6 +35,7 @@ import importlib
 
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 
 # Importing 3_json_reconstruction (leading digit -> importlib) reuses the
 # exact single-screen metric functions and, transitively, the model
@@ -44,6 +48,11 @@ flatten_components = _recon.flatten_components
 EmbeddingProjector = _recon.EmbeddingProjector
 AdapterConfig = _recon.AdapterConfig
 generate_from_prefix = _recon.generate_from_prefix
+
+# The trainer's target-length filter, reused so the validation split here is
+# computed over the same surviving rows the adapter was actually trained on.
+_adapter = importlib.import_module("2_train_adapter")
+fits_token_budget = _adapter.fits_token_budget
 
 from utils import load_embeddings, process_json_file
 
@@ -61,15 +70,33 @@ COMPLEXITY_BUCKETS = [
 # =============================================================================
 # Split / selection helpers
 # =============================================================================
-def get_validation_positions(df):
-    """Positions (iloc) of the validation split, matching 2_train_adapter.py."""
-    train_size = int(len(df) * 0.8)
-    return list(range(train_size, len(df)))
+def get_validation_positions(df, tokenizer, max_target_len):
+    """Positions (iloc, in the raw frame) of the validation split.
+
+    Matches 2_train_adapter.py exactly: build_target_column() drops rows
+    (unusable JSONs and targets over max_target_len tokens) BEFORE the 80/20
+    split, so the same filter has to run here.  Splitting the unfiltered
+    frame would shift the boundary and leak trained-on screens into the
+    "validation" sample.
+    """
+    kept_positions = []
+    for pos, (_, row) in enumerate(tqdm(
+            df.iterrows(), total=len(df),
+            desc="Filtering targets (as in training)")):
+        try:
+            target_json = process_json_file(row["json-path"], minify=True)
+        except Exception:
+            target_json = None
+        usable = bool(target_json) and len(target_json) >= 5
+        if usable and fits_token_budget(target_json, tokenizer, max_target_len):
+            kept_positions.append(pos)
+
+    train_size = int(len(kept_positions) * 0.8)
+    return kept_positions[train_size:]
 
 
-def select_positions(df, num_samples, full, seed):
+def select_positions(val_positions, num_samples, full, seed):
     """Seeded random sample of the validation split (or all of it)."""
-    val_positions = get_validation_positions(df)
     if full or num_samples >= len(val_positions):
         return val_positions
     rng = random.Random(seed)
@@ -129,8 +156,31 @@ def run_generate(args):
         print("[-] Error: no embeddings found.", file=sys.stderr)
         return
 
-    positions = select_positions(df, args.num_samples, args.full, args.seed)
-    print(f"[*] Validation split: {len(get_validation_positions(df))} screens, "
+    # The tokenizer is needed before the split can be computed: the trainer
+    # drops over-long targets with it, and the split must match (see
+    # get_validation_positions).  Resolving it needs the base model id, which
+    # is read from the LoRA checkpoint unless overridden.
+    lm_model_id = args.lm_model_id
+    if lm_model_id is None:
+        adapter_cfg_path = os.path.join(args.lora_model, "adapter_config.json")
+        try:
+            with open(adapter_cfg_path) as f:
+                lm_model_id = json.load(f)["base_model_name_or_path"]
+        except Exception as e:
+            print(
+                f"[-] Error: could not read base model from "
+                f"{adapter_cfg_path}: {e}\n    Pass --lm_model_id explicitly.",
+                file=sys.stderr,
+            )
+            return
+    tokenizer = AutoTokenizer.from_pretrained(lm_model_id)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    val_positions = get_validation_positions(df, tokenizer, cfg.max_target_len)
+    positions = select_positions(val_positions, args.num_samples, args.full,
+                                 args.seed)
+    print(f"[*] Validation split: {len(val_positions)} screens, "
           f"selected {len(positions)} "
           f"({'full split' if args.full else f'seed={args.seed}'})")
 
@@ -154,20 +204,6 @@ def run_generate(args):
     # -------------------------------------------------------------------------
     projector_sd = torch.load(args.projector_model, map_location="cpu")
 
-    lm_model_id = args.lm_model_id
-    if lm_model_id is None:
-        adapter_cfg_path = os.path.join(args.lora_model, "adapter_config.json")
-        try:
-            with open(adapter_cfg_path) as f:
-                lm_model_id = json.load(f)["base_model_name_or_path"]
-        except Exception as e:
-            print(
-                f"[-] Error: could not read base model from "
-                f"{adapter_cfg_path}: {e}\n    Pass --lm_model_id explicitly.",
-                file=sys.stderr,
-            )
-            return
-
     model_dtype = projector_sd["projector.0.weight"].dtype
     ckpt_hidden_dim = projector_sd["projector.2.weight"].shape[0]
     use_prefix_pos = "prefix_pos.weight" in projector_sd
@@ -178,10 +214,6 @@ def run_generate(args):
     )
 
     print(f"[*] Loading base language model: {lm_model_id} ({model_dtype})")
-    tokenizer = AutoTokenizer.from_pretrained(lm_model_id)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
     base_model = AutoModelForCausalLM.from_pretrained(
         lm_model_id,
         torch_dtype=model_dtype,
@@ -412,8 +444,10 @@ def main():
                      help="Screens generated per batch")
     gen.add_argument("--gpu", type=str, default=None,
                      help="CUDA device id to use (overrides utils.CUDA_VISIBLE_DEVICE)")
-    gen.add_argument("--max_tokens", type=int, default=1024,
-                     help="Maximum tokens to generate per screen")
+    gen.add_argument("--max_tokens", type=int, default=4096,
+                     help="Maximum tokens to generate per screen (matches "
+                          "AdapterConfig.max_target_len: the adapter is "
+                          "trained on targets up to this length)")
     gen.add_argument("--embeddings_dir", type=str,
                      default="embeddings_4096_last",
                      help="Path to embeddings directory (accepts both "
