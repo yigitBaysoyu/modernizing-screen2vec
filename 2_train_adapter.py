@@ -55,7 +55,15 @@ class AdapterConfig:
     num_epochs = 100
     # patience = 5  # Early stopping patience
     patience = 3  # sanity check: as in 926391f
-    max_target_len = 2048  # Max tokens for the target JSON string
+    # Max tokens for the target JSON string.  Targets that do not fit are
+    # dropped by build_target_column() rather than truncated -- see the note
+    # there on why truncating them poisons the stop behaviour.
+    #
+    # Measured over all 66,261 cleaned Rico ground truths (Qwen2.5 tokenizer):
+    # p50 617, p90 1788, p95 2268, p99 3360, p99.9 6301, max 158,896 tokens.
+    # 4096 keeps 99.56% of the dataset and costs ~1.03x the training compute of
+    # 2048, because only 7% of the samples are anywhere near the limit.
+    max_target_len = 4096
     grad_accum_steps = 4  # Gradient accumulation steps
 
 
@@ -123,13 +131,13 @@ class EmbeddingProjector(nn.Module):
             nn.GELU(),
             nn.Linear(lm_hidden_dim * 2, lm_hidden_dim),
         )
-        # sanity check: 926391f had no positional table, so training defaults to
-        # use_prefix_pos=False. It was added in 8453eda only because b161f33 had
-        # collapsed embeddings to (4096,), where expand() produces 128 identical
-        # copies. With (128, 4096) input the tokens are already distinct, so it
-        # solves a problem that does not exist here.
-        # The flag stays so that 3_json_reconstruction.py can still load the
-        # checkpoints trained while the table was present.
+        # Added in 8453eda because b161f33 had collapsed embeddings to (4096,),
+        # where expand() produces num_prefix_tokens identical copies. The table
+        # is what makes those tokens distinguishable again, so it belongs to the
+        # (4096,) case and only to it: with (N, 4096) input the tokens already
+        # differ and 926391f trained fine without one. main() therefore derives
+        # the flag from the embedding shape instead of fixing it here.
+        # 3_json_reconstruction.py detects it from the checkpoint either way.
         self.use_prefix_pos = use_prefix_pos
         if use_prefix_pos:
             self.prefix_pos = nn.Embedding(num_prefix_tokens, lm_hidden_dim)
@@ -169,21 +177,39 @@ class EmbeddingProjector(nn.Module):
 # =============================================================================
 # Autoregressive Generation with KV-Cache
 # =============================================================================
-def generate_from_prefix(model, tokenizer, prefix_embeds, max_new_tokens=512):
+def generate_from_prefix(
+    model, tokenizer, prefix_embeds, max_new_tokens=512, eos_check_every=16
+):
     """
     Autoregressively generate tokens conditioned on prefix embeddings.
     Uses KV-caching for efficient O(n) generation.
 
     Args:
-        model:          The (LoRA-wrapped) causal LM.
-        tokenizer:      The LM's tokenizer (for EOS detection).
-        prefix_embeds:  [B, num_prefix, hidden_dim] projected prefix embeddings.
-        max_new_tokens: Maximum number of tokens to generate.
+        model:           The (LoRA-wrapped) causal LM.
+        tokenizer:       The LM's tokenizer (for EOS detection).
+        prefix_embeds:   [B, num_prefix, hidden_dim] projected prefix embeddings.
+        max_new_tokens:  Maximum number of tokens to generate.
+        eos_check_every: How many decode steps to run between EOS checks.  See
+                         below -- this is a throughput knob, not a semantic one.
 
     Returns:
-        generated_ids: [B, generated_len] tensor of generated token IDs.
+        generated_ids: [B, generated_len] tensor of generated token IDs,
+                       truncated after the first position where every sequence
+                       emitted EOS.
+
+    Reading the sampled token back on the host is the single most expensive
+    thing this loop can do.  `next_token` lives on the GPU, so testing it in a
+    Python `if` forces a device synchronisation, and a sync every step means
+    the CPU can never queue the next step's kernels while the current one runs.
+    At batch size 1 a 1.5B model launches far more kernels than it does real
+    arithmetic, so that serialisation -- not the matmuls -- sets the pace.
+
+    Checking every `eos_check_every` steps instead lets the launch queue stay
+    ahead of the device.  The cost is that generation can overshoot EOS by up
+    to `eos_check_every - 1` tokens; the truncation at the end removes them, so
+    the returned tensor is identical to what a per-step check would produce.
     """
-    device = prefix_embeds.device
+    eos_token_id = tokenizer.eos_token_id
 
     # First forward pass: process all prefix embeddings, populate KV cache
     outputs = model(inputs_embeds=prefix_embeds, use_cache=True)
@@ -192,11 +218,16 @@ def generate_from_prefix(model, tokenizer, prefix_embeds, max_new_tokens=512):
     next_token = torch.argmax(next_token_logits, dim=-1, keepdim=True)
 
     generated = [next_token]
+    steps_since_check = 1
 
     # Subsequent passes: single token at a time with cached KV
     for _ in range(max_new_tokens - 1):
-        if (next_token == tokenizer.eos_token_id).all():
-            break
+        if steps_since_check >= eos_check_every:
+            # One sync per `eos_check_every` steps instead of one per step.
+            window = torch.cat(generated[-steps_since_check:], dim=1)
+            if (window == eos_token_id).all(dim=0).any():
+                break
+            steps_since_check = 0
 
         outputs = model(
             input_ids=next_token,
@@ -207,17 +238,54 @@ def generate_from_prefix(model, tokenizer, prefix_embeds, max_new_tokens=512):
         next_token_logits = outputs.logits[:, -1, :]
         next_token = torch.argmax(next_token_logits, dim=-1, keepdim=True)
         generated.append(next_token)
+        steps_since_check += 1
 
-    return torch.cat(generated, dim=1)
+    generated_ids = torch.cat(generated, dim=1)
+
+    # Drop whatever was generated past the first all-sequences-EOS position.
+    # `.all(dim=0)` mirrors the batch semantics of the original per-step check.
+    eos_positions = (generated_ids == eos_token_id).all(dim=0).nonzero()
+    if eos_positions.numel() > 0:
+        generated_ids = generated_ids[:, : eos_positions[0].item() + 1]
+
+    return generated_ids
 
 
 # =============================================================================
 # Dataset preparation (target caching + distributed sharding)
 # =============================================================================
-def build_target_column(embeddings, accelerator):
+def fits_token_budget(target_json, tokenizer, max_target_len):
+    """
+    True if `target_json` plus its EOS token fits within `max_target_len`.
+
+    A string of N characters can never tokenize to more than N tokens, so a
+    target shorter than the budget fits without asking the tokenizer at all.
+    That short-circuit skips roughly half the dataset (median target is ~2.1k
+    characters against a 4096-token budget) and keeps the one-off cost of this
+    pass down.
+    """
+    if len(target_json) + 1 <= max_target_len:
+        return True
+    n_tokens = len(tokenizer(target_json, add_special_tokens=False).input_ids)
+    return n_tokens + 1 <= max_target_len
+
+
+def build_target_column(embeddings, accelerator, tokenizer, max_target_len):
     """
     Pre-computes the cleaned target JSON for every row and drops the rows that
-    cannot serve as a training target.
+    cannot serve as a training target -- either because the JSON is unusable,
+    or because it does not fit in `max_target_len` tokens.
+
+    Dropping the over-long ones matters more than it looks.  The training loop
+    tokenizes `target_json + eos_token` with truncation, and the tokenizer
+    truncates from the right, so an over-long target loses exactly the EOS it
+    was supposed to teach.  Every such sample is a worked example of "generate
+    this far and then keep going", which is precisely the degenerate behaviour
+    that makes reconstruction runs hit the token ceiling and emit invalid JSON.
+    At max_target_len=2048 this affected 4,609 of 66,261 samples (6.96%);
+    at 4096 it would be 290, and dropping them instead removes the failure mode
+    entirely at a *lower* cost than truncating (the longest sequences are also
+    the most expensive ones to train on).
 
     Runs before sharding and identically on every rank, for two reasons:
 
@@ -235,6 +303,8 @@ def build_target_column(embeddings, accelerator):
     """
     targets = []
     keep = []
+    n_unusable = 0
+    n_too_long = 0
     for _, row in tqdm(
             embeddings.iterrows(),
             total=len(embeddings),
@@ -247,6 +317,12 @@ def build_target_column(embeddings, accelerator):
             target_json = None
 
         usable = bool(target_json) and len(target_json) >= 5
+        if not usable:
+            n_unusable += 1
+        elif not fits_token_budget(target_json, tokenizer, max_target_len):
+            usable = False
+            n_too_long += 1
+
         keep.append(usable)
         targets.append(target_json if usable else "")
 
@@ -254,9 +330,15 @@ def build_target_column(embeddings, accelerator):
     prepared["target-json"] = targets
     prepared = prepared[keep]
 
-    dropped = len(embeddings) - len(prepared)
-    if dropped and accelerator.is_local_main_process:
-        print(f"Dropped {dropped} samples without a usable JSON target.")
+    if accelerator.is_local_main_process:
+        if n_unusable:
+            print(f"Dropped {n_unusable} samples without a usable JSON target.")
+        if n_too_long:
+            print(
+                f"Dropped {n_too_long} samples longer than "
+                f"{max_target_len} tokens (truncating them would strip the EOS)."
+            )
+        print(f"Kept {len(prepared)} of {len(embeddings)} samples.")
 
     return prepared
 
@@ -305,34 +387,14 @@ def main():
         print(f"Critical error: {e}")
         return
 
-    # Resolve and cache the target JSON up front, so the per-rank row counts
-    # below cannot diverge later inside the training loop.
-    all_embeddings = build_target_column(all_embeddings, accelerator)
-
-    train_size = int(len(all_embeddings) * 0.8)
-    train_embeddings = all_embeddings.iloc[:train_size]
-    val_embeddings = all_embeddings.iloc[train_size:]
-    if accelerator.is_local_main_process:
-        print(
-            f"Using {len(train_embeddings)} samples for training "
-            f"and {len(val_embeddings)} for validation."
-        )
-
-    # Shard the datasets manually for distributed processes, equal length per rank
-    train_embeddings = shard_for_process(train_embeddings, accelerator)
-    val_embeddings = shard_for_process(val_embeddings, accelerator)
-    if accelerator.is_local_main_process:
-        print(
-            f"Per-rank shard: {len(train_embeddings)} train / "
-            f"{len(val_embeddings)} val across {accelerator.num_processes} processes."
-        )
-
     # -------------------------------------------------------------------------
     # 2. Load small LM + tokenizer
     # -------------------------------------------------------------------------
+    # Loaded before the targets are prepared because build_target_column() needs
+    # the tokenizer to decide which targets fit the token budget.
+    #
     # Load model with bfloat16 if GPU is available to save memory and match native training precision
-    # model_dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
-    model_dtype = torch.float32  # sanity check: 926391f trained in float32
+    model_dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
 
     with accelerator.main_process_first():
         if accelerator.is_local_main_process:
@@ -373,7 +435,44 @@ def main():
         )
 
     # -------------------------------------------------------------------------
-    # 3. Apply LoRA
+    # 3. Prepare targets, split, and shard
+    # -------------------------------------------------------------------------
+    # Resolve and cache the target JSON up front, so the per-rank row counts
+    # below cannot diverge later inside the training loop.
+    all_embeddings = build_target_column(
+        all_embeddings, accelerator, tokenizer, cfg.max_target_len
+    )
+
+    # Without this the run would "succeed" doing nothing: every loop below is
+    # driven by the DataFrame, so an empty one trains zero steps and still
+    # writes a checkpoint of the untouched initial weights.
+    if len(all_embeddings) == 0:
+        print(
+            f"No usable embedding/JSON pairs in '{args.embeddings_dir}'. "
+            "Nothing to train on."
+        )
+        return
+
+    train_size = int(len(all_embeddings) * 0.8)
+    train_embeddings = all_embeddings.iloc[:train_size]
+    val_embeddings = all_embeddings.iloc[train_size:]
+    if accelerator.is_local_main_process:
+        print(
+            f"Using {len(train_embeddings)} samples for training "
+            f"and {len(val_embeddings)} for validation."
+        )
+
+    # Shard the datasets manually for distributed processes, equal length per rank
+    train_embeddings = shard_for_process(train_embeddings, accelerator)
+    val_embeddings = shard_for_process(val_embeddings, accelerator)
+    if accelerator.is_local_main_process:
+        print(
+            f"Per-rank shard: {len(train_embeddings)} train / "
+            f"{len(val_embeddings)} val across {accelerator.num_processes} processes."
+        )
+
+    # -------------------------------------------------------------------------
+    # 4. Apply LoRA
     # -------------------------------------------------------------------------
     lora_config = LoraConfig(
         task_type=TaskType.CAUSAL_LM,
@@ -387,7 +486,7 @@ def main():
         lm_model.print_trainable_parameters()
 
     # -------------------------------------------------------------------------
-    # 4. Create projector
+    # 5. Create projector
     # -------------------------------------------------------------------------
     # Ensure all components use the model's actual loaded precision
     model_dtype = next(lm_model.parameters()).dtype
@@ -395,16 +494,29 @@ def main():
         print(f"Model loaded with dtype: {model_dtype}")
 
     lm_hidden_dim = lm_model.config.hidden_size
+    # A (4096,) embedding is expanded into num_prefix_tokens identical copies by
+    # the projector, so it needs the positional table to tell them apart again.
+    # An (N, 4096) one carries N distinct tokens already and trains without it,
+    # as in 926391f. Deriving the flag from the shape reproduces the 2k sweep
+    # exactly: its two (4096,) checkpoints carry prefix_pos.weight, the
+    # (N, 4096) ones do not.
+    use_prefix_pos = all_embeddings["embedding"].iloc[0].ndim == 1
     projector = EmbeddingProjector(
-        cfg.qwen_embed_dim, lm_hidden_dim, cfg.num_prefix_tokens
+        cfg.qwen_embed_dim, lm_hidden_dim, cfg.num_prefix_tokens,
+        use_prefix_pos=use_prefix_pos,
     ).to(model_dtype)
+    if accelerator.is_local_main_process:
+        print(
+            f"Embedding shape: {all_embeddings['embedding'].iloc[0].shape} | "
+            f"prefix_pos table: {'on' if use_prefix_pos else 'off'}"
+        )
 
     proj_params = sum(p.numel() for p in projector.parameters())
     if accelerator.is_local_main_process:
         print(f"Projector parameters: {proj_params:,}")
 
     # -------------------------------------------------------------------------
-    # 5. Optimizer with separate learning rates
+    # 6. Optimizer with separate learning rates
     # -------------------------------------------------------------------------
     optimizer = torch.optim.AdamW([
         {"params": projector.parameters(), "lr": cfg.lr_projector},
@@ -418,7 +530,7 @@ def main():
     lm_model, projector, optimizer = accelerator.prepare(lm_model, projector, optimizer)
 
     # -------------------------------------------------------------------------
-    # 6. Training loop
+    # 7. Training loop
     # -------------------------------------------------------------------------
     history = {"train_loss": [], "val_loss": []}
     best_val_loss = float("inf")

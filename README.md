@@ -29,6 +29,29 @@ Our goal is to create better screens than the original authors could with their 
 
 - All embeddings and adapter training needs to be redone, when the JSON processing code is touched!
 
+## Generating Several Embedding Shapes at Once
+
+`1_qwen_generate_embeddings.py` takes several `--pool-tokens` values. They are all
+pooled out of the *same* forward pass and written to their own directory, so a
+sweep over N costs one inference run rather than one per N:
+
+```bash
+python 1_qwen_generate_embeddings.py job.json --pool-tokens 2 4 8 16 32 64 --pooling avg
+# -> embeddings_2x4096_avg/ ... embeddings_64x4096_avg/
+```
+
+The shapes are *not* derivable from one another afterwards: `adaptive_avg_pool1d`
+puts its bucket borders at `floor(i*L/N)` / `ceil((i+1)*L/N)`, which only line up
+between two N when the valid sequence length divides evenly, and each bucket is
+L2-normalized individually on top. So they have to be taken from the live hidden
+states, which is what a multi-value `--pool-tokens` does.
+
+Add `--skip-existing` to resume a run that hit its wall time; it skips screens
+whose `.npz` already exists in *every* target directory.
+
+On the cluster, set `POOL_TOKENS` in `hpc/_hpc1_start_embedding.py` to the list
+of N you want and submit once.
+
 ## Process Sketch
 
 ![](assets/process-draft.png)
@@ -83,7 +106,7 @@ Important Notes:
 
 To reproduce the results that significantly outperform Screen2Vec's Table 3 on the GUI Screen Prediction task, run the following pipeline sequence:
 
-### Pipeline 1
+### Pipeline v1
 
 1. **Train Sequence Projector:**
    Trains a projector network (4096 -> 1024 -> 768) on the raw Qwen3-VL embeddings using InfoNCE loss.
@@ -109,7 +132,7 @@ To reproduce the results that significantly outperform Screen2Vec's Table 3 on t
    python 4_evaluate_screen_prediction.py --embeddings_dir embeddings_seq_768_with_app --lstm_model lstm_predictor_768d.pth
    ```
 
-### Pipeline 2
+### Pipeline v2
 
 ```bash
 # Step 1-3: Only if you haven't already (you have — embeddings_4096_last/ exists)
@@ -119,7 +142,7 @@ To reproduce the results that significantly outperform Screen2Vec's Table 3 on t
 python 9_train_joint.py --proj_dim 768
 
 # Step 5: Same as before
-python 6_generate_app_context_embeddings.py --embeddings_dir embeddings_seq_768 --output_dir embeddings_seq_768_with_app
+python 6_generate_app_context_embeddings.py --embeddings_dir embeddings_seq_768 --output_dir embeddings_seq_768_with_app_desc
 
 # Step 6: Same as before
 python 4_evaluate_screen_prediction.py --embeddings_dir embeddings_seq_768_with_app --lstm_model lstm_predictor_768d.pth

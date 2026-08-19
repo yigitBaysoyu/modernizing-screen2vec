@@ -11,7 +11,7 @@ from pathlib import Path
 # ==============================================================================
 
 # How many jobs out of the JOBS array each SLURM array task works on
-JOBS_PER_BATCH = 250
+JOBS_PER_BATCH = 8283
 
 # Set to None to run all batches, otherwise set to number of batches to be run (all others are discarded)
 MAX_BATCHES = 8
@@ -19,16 +19,24 @@ MAX_BATCHES = 8
 
 input(f"Only {JOBS_PER_BATCH} x {MAX_BATCHES} = {JOBS_PER_BATCH*MAX_BATCHES} embeddings will be done! (press enter to continue)")
 
-# Embedding shape produced by 1_qwen_generate_embeddings.py.
-# POOL_TOKENS = 1 -> (4096,), N -> (N, 4096). Results land in
+# Embedding shapes produced by 1_qwen_generate_embeddings.py.
+# N = 1 -> (4096,), N -> (N, 4096). Results land in
 # embeddings_4096_{POOLING}/ resp. embeddings_{N}x4096_{POOLING}/ inside
 # each task folder.
-# Supported: 1, 4, 8, 16, 32, 64, 128
-POOL_TOKENS = 1
+#
+# This is a list: every entry is pooled out of the *same* forward pass, so a
+# whole sweep is one job and one inference run instead of one job per N.
+# Supported: 1, 2, 4, 8, 16, 32, 64, 128
+POOL_TOKENS = [2, 4, 8, 16, 32, 64]
 
-# "last" (only valid for POOL_TOKENS = 1) or "avg" (valid for every N).
+# "last" (only valid for POOL_TOKENS = [1]) or "avg" (valid for every N).
 # Use "avg" throughout when sweeping N, so the runs stay comparable.
 POOLING = "avg"
+
+# Skip screens whose .npz already exists in every output directory. Set to True
+# when resubmitting a job that ran into its wall time, so it picks up where it
+# stopped instead of re-embedding everything.
+SKIP_EXISTING = False
 
 # ==============================================================================
 # 2) HPC SETTINGS
@@ -146,6 +154,11 @@ def create_master_sbatch_script(path, total_array_elements):
     """
     sbatch_header = get_hpc_slurm_directives("array", total_array_elements)
 
+    # All N go into one invocation: 1_qwen_generate_embeddings.py pools them
+    # from a single forward pass per screen.
+    pool_tokens_arg = " ".join(str(n) for n in POOL_TOKENS)
+    skip_existing_arg = " --skip-existing" if SKIP_EXISTING else ""
+
     script_content = f"""#!/bin/bash
 {sbatch_header}
 
@@ -169,7 +182,7 @@ pip install -r requirements.txt
 srun python hpc/env.py
 
 # EXECUTE MAIN WORKLOAD
-srun python 1_qwen_generate_embeddings.py job.json --pool-tokens {POOL_TOKENS} --pooling {POOLING}
+srun python 1_qwen_generate_embeddings.py job.json --pool-tokens {pool_tokens_arg} --pooling {POOLING}{skip_existing_arg}
 
 # Copy logs from the submission directory (the first folder) to this task's hpc folder
 cp $SLURM_SUBMIT_DIR/stdout_${{SLURM_ARRAY_JOB_ID}}_${{SLURM_ARRAY_TASK_ID}}.txt hpc/ 2>/dev/null || true
@@ -210,18 +223,33 @@ def prepare_task_folder(array_id: int, job: dict):
 # 4) MAIN
 # ==============================================================================
 def main():
-    if POOL_TOKENS not in (1, 4, 8, 16, 32, 64, 128):
-        raise ValueError(f"Unsupported POOL_TOKENS: {POOL_TOKENS}")
-    if POOLING == "last" and POOL_TOKENS != 1:
+    pool_tokens = sorted(set(POOL_TOKENS))
+    unsupported = [n for n in pool_tokens if n not in (1, 2, 4, 8, 16, 32, 64, 128)]
+    if unsupported:
+        raise ValueError(f"Unsupported POOL_TOKENS: {unsupported}")
+    if not pool_tokens:
+        raise ValueError("POOL_TOKENS is empty; nothing to embed.")
+    if POOLING == "last" and pool_tokens != [1]:
         raise ValueError(
             f"POOLING='last' produces a single vector; it cannot be combined "
-            f"with POOL_TOKENS={POOL_TOKENS}. Use POOLING='avg'."
+            f"with POOL_TOKENS={pool_tokens}. Use POOLING='avg'."
         )
 
-    shape = "(4096,)" if POOL_TOKENS == 1 else f"({POOL_TOKENS}, 4096)"
-    stem = "4096" if POOL_TOKENS == 1 else f"{POOL_TOKENS}x4096"
-    out_dir = f"embeddings_{stem}_{POOLING}"
-    print(f"Embeddings: pooling={POOLING}, shape={shape}, output={out_dir}/")
+    print(f"Embeddings: pooling={POOLING}, one forward pass per screen, outputs:")
+    for n in pool_tokens:
+        shape = "(4096,)" if n == 1 else f"({n}, 4096)"
+        stem = "4096" if n == 1 else f"{n}x4096"
+        print(f"  N={n:<3} shape={shape:<12} -> embeddings_{stem}_{POOLING}/")
+
+    # fp16 and barely compressible, so the raw size is a good estimate. Worth
+    # printing: the full sweep is a lot larger than any single N, and scratch
+    # quota is the thing that bites at the end of a 48h job.
+    per_screen_mb = sum(pool_tokens) * 4096 * 2 / 1024 ** 2
+    total_gb = per_screen_mb * JOBS_PER_BATCH * (MAX_BATCHES or 1) / 1024
+    print(
+        f"Estimated storage: ~{per_screen_mb:.2f} MB per screen over all shapes, "
+        f"~{total_gb:.1f} GB in total."
+    )
 
     batches = create_batches()
     total = len(batches)

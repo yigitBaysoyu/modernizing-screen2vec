@@ -253,9 +253,9 @@ def main():
         description="Train a contrastive sequence projector on RICO traces"
     )
     parser.add_argument(
-        "--proj_dim", type=int, default=128,
+        "--proj_dim", type=int, default=768,
         help="Output embedding dimensionality (default: 128). "
-             "Use 64 to match Screen2Vec, 4096 to keep original dim.",
+             "Use 768 to match Screen2Vec, 4096 to keep original dim.",
     )
     parser.add_argument(
         "--hidden_dim", type=int, default=1024,
