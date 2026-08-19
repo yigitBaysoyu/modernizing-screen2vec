@@ -24,7 +24,7 @@ JOBS_PER_BATCH = 10000
 # AdapterConfig of that commit (Qwen2.5-1.5B, float32, attention-only LoRA,
 # patience 3, projector without positional table).
 # EMBEDDINGS_DIR = "embeddings_4096_last"
-EMBEDDINGS_DIR = "embeddings_4096_last"
+EMBEDDINGS_DIR = "embeddings_8x4096_avg"
 
 # Any name works: start.sh exports it as $ADAPTER_OUTPUT_DIR and
 # hpc/mail.py:find_adapter_output_dir() reads it to decide whether to archive
@@ -218,7 +218,7 @@ def prepare_task_folder(array_id: int, job: dict):
 def main():
     batches = create_batches()
     total = len(batches)
-    
+
     if total == 0:
         raise ValueError("No jobs (JOBS) found to submit.")
 

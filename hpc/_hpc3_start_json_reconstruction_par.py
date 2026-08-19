@@ -12,10 +12,10 @@ from pathlib import Path
 # ==============================================================================
 
 # Model / reconstruction arguments
-ADAPTER_FOLDER = "adapter_model_out_embeddings_4096_last_full_qwen2.5-1.5b"
+ADAPTER_FOLDER = "adapter_model_out_embeddings_4x4096_avg_full_qwen2.5-1.5b"
+EMBEDDINGS_DIR = "embeddings_4096_last"
 PROJECTOR_MODEL = f"{ADAPTER_FOLDER}/best_projector.pth"
 LORA_MODEL = f"{ADAPTER_FOLDER}/best_lora_adapter"
-EMBEDDINGS_DIR = "embeddings_4096_last"
 DATA_DIR = "../rico-data/data/layouts"
 OUTPUT_DIR = f"reconstructions_for_{ADAPTER_FOLDER}"
 # Must track AdapterConfig.max_target_len (4096) -- the longest target the
@@ -25,7 +25,7 @@ OUTPUT_DIR = f"reconstructions_for_{ADAPTER_FOLDER}"
 # between 2048 and 8192 tokens, while runaways ran to the ceiling and produced
 # invalid JSON in every single case.
 MAX_TOKENS = 4608
-NUM_WORKERS = 8  # One per GPU
+NUM_WORKERS = 4  # One per GPU
 
 # ==============================================================================
 # 2) HPC SETTINGS
