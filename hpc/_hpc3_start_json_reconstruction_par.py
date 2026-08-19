@@ -15,8 +15,11 @@ from pathlib import Path
 # Model / reconstruction arguments
 ADAPTER_FOLDER = "adapter_model_out_embeddings_4x4096_avg_full_qwen2.5-1.5b"
 
-# How many elements go through one forward pass.
-BATCH_SIZE = 128
+# How many elements go through one forward pass.  Modelled over the real Rico
+# target lengths, 256 costs 12.3k decode steps per shard against 18.2k at 128,
+# and is best or within a few percent of best whatever the fixed per-step cost
+# is; 512 saves another 23% of steps but wants 68 GB of KV cache for it.
+BATCH_SIZE = 256
 
 # One array task per shard, each asking for a single GPU.  Slurm is free to
 # scatter them across nodes and to start them as capacity appears, instead of

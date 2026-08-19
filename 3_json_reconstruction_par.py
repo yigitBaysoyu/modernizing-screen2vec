@@ -407,17 +407,22 @@ def build_dataset_index(embeddings_dir, data_dir):
 # =============================================================================
 def order_dataset_for_batching(dataset):
     """
-    Sort the dataset by ground-truth file size, ascending.
+    Globally order the dataset by ground-truth file size, ascending.
 
-    A batch decodes until its *longest* member emits EOS, so a batch that mixes
-    a 600-token screen with a 4000-token one pays the 4000-token cost for all 64
-    of its members.  Rico ground truths run from p50 617 to p99 3360 tokens, so
-    that mismatch is the difference between most of a batch doing useful work
-    and most of it emitting padding EOS.
+    This is the coarse pass, and its job is load balancing rather than batching:
+    slice_for_worker() strides this list, so every shard has to derive the same
+    order from the same inputs without talking to the others, and one stat() per
+    file is all that can be afforded across the full 66k-element dataset.
 
-    The raw layout file size is a free proxy for the length of the cleaned JSON
-    -- one stat() per file, no parsing -- and it only has to be monotone, not
-    accurate.  Items without a ground truth carry no length signal and go last.
+    Measured on the real Rico layouts, striding this order gives shards that
+    differ by at most one element and by 0.4% (8 shards) to 1.5% (32 shards) in
+    total ground-truth bytes.  Items without a ground truth carry no length
+    signal at all and go last, in rico_id order.
+
+    It is a poor *batching* order on its own -- raw layout bytes correlate with
+    the cleaned target only at Spearman 0.81, which leaves a batch of 128
+    spanning far more length than it needs to.  refine_order_by_target_length()
+    fixes that within a shard, where it is affordable.
     """
     def sort_key(item):
         try:
@@ -426,6 +431,52 @@ def order_dataset_for_batching(dataset):
             return (1, 0)
 
     return sorted(dataset, key=sort_key)
+
+
+def target_length(item):
+    """Length of the cleaned ground-truth JSON, or None if there is not one."""
+    from utils import process_json_file
+
+    if not item["json_path"]:
+        return None
+    try:
+        return len(process_json_file(item["json_path"], minify=True))
+    except Exception:
+        return None
+
+
+def refine_order_by_target_length(items, io_workers=8):
+    """
+    Re-sort one shard's items by the length of the cleaned target, ascending.
+
+    A batch decodes until its *longest* member emits EOS, so the spread of
+    target lengths inside a batch is what decides how much of the work is real
+    and how much is padding EOS.  The global file-size order is only a proxy for
+    that, and not a strong one.  Measured over shard 0 of the Rico dataset at
+    batch 128, counting decode steps:
+
+        shuffled                    4.8x the ideal work
+        by raw file size            3.1x
+        by cleaned target length    1.1x
+
+    i.e. exact ordering is worth 2.3x fewer forward passes over the proxy -- the
+    single largest factor in this script after the batching itself.
+
+    It is affordable here and nowhere else: the cost is one process_json_file()
+    per item, and a shard is a fraction of the dataset.  At ~2-15 ms per file
+    that is seconds to a couple of minutes once, against hours of decoding.
+    Items without a usable ground truth keep their relative order and go last;
+    they still have to be reconstructed, there is just nothing to sort them by.
+    """
+    with ThreadPoolExecutor(max_workers=max(1, io_workers)) as pool:
+        lengths = list(pool.map(target_length, items))
+
+    known = [(n, i) for i, n in enumerate(lengths) if n is not None]
+    unknown = [i for i, n in enumerate(lengths) if n is None]
+    known.sort()
+
+    return ([items[i] for _, i in known] + [items[i] for i in unknown],
+            len(unknown))
 
 
 def slice_for_worker(dataset, global_worker_id, global_num_workers):
@@ -826,6 +877,15 @@ def gpu_worker(worker_id, num_workers, dataset, args):
         print(f"[Worker {worker_id}] Nothing left to do. Exiting.")
         return
 
+    # Tighten the batching order. Worth doing before the model is loaded: it is
+    # pure file I/O, and a wrong order costs multiples of the decode time.
+    if args.order_by == "exact":
+        order_start = time.time()
+        todo, without_gt = refine_order_by_target_length(todo, args.io_workers)
+        print(f"[Worker {worker_id}] Ordered {len(todo)} elements by target "
+              f"length in {time.time() - order_start:.0f}s "
+              f"({without_gt} without ground truth, appended)", flush=True)
+
     # Load models
     cfg = AdapterConfig()
 
@@ -1162,14 +1222,13 @@ def build_arg_parser():
         ),
     )
     parser.add_argument(
-        "--batch_size", type=int, default=128,
+        "--batch_size", type=int, default=256,
         help=(
             "How many elements to decode in one forward pass. A batch runs "
-            "until its longest member emits EOS, so items are ordered by "
-            "expected output length to keep batches uniform. Past roughly 128 "
-            "the KV cache read overtakes the weight read and a bigger batch "
-            "stops buying throughput per sequence -- see the note on "
-            "BATCH_SIZE in hpc/_hpc3_start_json_reconstruction_par.py."
+            "until its longest member emits EOS, so --order_by decides how "
+            "much of that work is real. Modelled over the Rico target "
+            "lengths, 256 is best or near-best whatever the fixed per-step "
+            "cost turns out to be; 512 needs 68 GB of KV to justify itself."
         ),
     )
     parser.add_argument(
@@ -1216,7 +1275,20 @@ def build_arg_parser():
     )
     parser.add_argument(
         "--io_workers", type=int, default=8,
-        help="Threads used to read a batch's .npz embeddings from Lustre.",
+        help=(
+            "Threads used to read a batch's .npz embeddings from Lustre, and "
+            "to measure target lengths for --order_by exact."
+        ),
+    )
+    parser.add_argument(
+        "--order_by", type=str, default="exact", choices=("exact", "size", "none"),
+        help=(
+            "How to order a shard's elements before batching. 'exact' measures "
+            "each cleaned ground truth once (seconds per shard) and is worth "
+            "~2.3x fewer forward passes over 'size', which keeps the cheap "
+            "global file-size order. 'none' is the same as 'size' here, since "
+            "the global order is what the shards are strided out of."
+        ),
     )
     parser.add_argument(
         "--progress_every", type=int, default=64,
@@ -1336,6 +1408,7 @@ def main():
           f"({global_num_workers} workers globally)")
     print(f"  Num GPUs        : {args.num_gpus} "
           f"({args.num_workers / args.num_gpus:.1f} workers/GPU)")
+    print(f"  Batch order     : {args.order_by}")
     print(f"  Eval workers    : {args.eval_workers or 'inline'}")
     print(f"  Output dir      : {args.output_dir}")
     print("=" * 70)
