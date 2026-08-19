@@ -1,0 +1,27 @@
+[ra73net2@login-02:~$ sinfo
+PARTITION           AVAIL  TIMELIMIT   NODES  STATE NODELIST
+lrz-v100x2*            up 14-00:00:0       4    mix gpu-[001-003,005]
+lrz-hpe-p100x4         up 14-00:00:0       1    mix p100-001
+lrz-dgx-1-p100x8       up 14-00:00:0       1    mix dgx-001
+lrz-dgx-1-v100x8       up 14-00:00:0       1    mix dgx-002
+lrz-dgx-a100-80x8      up 14-00:00:0       1 drain$ lrz-dgx-a100-001
+lrz-dgx-a100-80x8      up 14-00:00:0       2    mix lrz-dgx-a100-[002,005]
+lrz-dgx-a100-80x8      up 14-00:00:0       1  alloc lrz-dgx-a100-004
+lrz-hgx-a100-80x4      up 14-00:00:0       4    mix lrz-hgx-a100-[002-005]
+lrz-dgx-a100-40x8-mig  up 14-00:00:0       1    mix lrz-dgx-a100-003
+lrz-hgx-h100-94x4      up 14-00:00:0      30    mix lrz-hgx-h100-[001-030]
+lrz-cpu                up 14-00:00:0       5  maint cpu-[008-012]
+lrz-cpu                up 14-00:00:0       3    mix cpu-[001-002,004]
+lrz-cpu                up 14-00:00:0       1  alloc cpu-007
+lrz-cpu                up 14-00:00:0       3   idle cpu-[003,005-006]
+mcml-dgx-a100-40x8     up 14-00:00:0       1   plnd mcml-dgx-005
+mcml-dgx-a100-40x8     up 14-00:00:0       7    mix mcml-dgx-[001-004,006-008]
+mcml-hgx-a100-80x4     up 14-00:00:0       1 drain$ mcml-hgx-a100-003
+mcml-hgx-a100-80x4     up 14-00:00:0      16    mix mcml-hgx-a100-[001-002,004-017]
+mcml-hgx-a100-80x4     up 14-00:00:0       1   idle mcml-hgx-a100-018
+mcml-hgx-a100-80x4-mig up 14-00:00:0       2    mix mcml-hgx-a100-[019-020]
+mcml-hgx-a100-80x4-mig up 14-00:00:0       1   idle mcml-hgx-a100-021
+mcml-hgx-h100-94x4     up 14-00:00:0      18    mix mcml-hgx-h100-[001-004,006-019]
+mcml-hgx-h100-94x4     up 14-00:00:0       3  alloc mcml-hgx-h100-[005,020-021]
+test-v100x2            up 14-00:00:0       1 drain$ gpu-004
+[ra73net2@login-02:~$
