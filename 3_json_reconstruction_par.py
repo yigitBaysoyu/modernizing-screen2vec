@@ -77,6 +77,14 @@ UNLIMITED_TOKEN_BUDGET = 1_000_000
 # See claim_output_dir() for what it is for.
 RUN_MANIFEST_NAME = "_run_manifest.json"
 
+# How long a shard keeps re-reading a manifest that is there but not readable
+# yet.  All eight array tasks start within a second of each other, so the reader
+# can arrive while the writer is still between create() and write() -- and on
+# Lustre the metadata can be visible on another node before the data is.  A few
+# seconds of patience covers both; anything longer is a genuinely broken file.
+MANIFEST_READ_ATTEMPTS = 10
+MANIFEST_READ_DELAY_S = 1.0
+
 
 # =============================================================================
 # Evaluation Helpers (copied from 3_json_reconstruction.py to keep this
@@ -493,6 +501,91 @@ def slice_for_worker(dataset, global_worker_id, global_num_workers):
     return dataset[global_worker_id::global_num_workers]
 
 
+def _write_manifest_exclusively(manifest_path, record):
+    """
+    Publish the manifest in a single atomic step, or report that another shard
+    got there first.  Returns True if this process is the one that created it.
+
+    The content is written to a private temporary file and then hard-linked into
+    place: link() is atomic and fails if the name is taken, so a concurrent
+    reader sees either no manifest at all or a complete one.  Creating the file
+    first and writing into it afterwards (open(..., "x")) publishes an empty
+    file for as long as the write takes, which is exactly the window that made
+    a shard read zero bytes and die in json.load().
+    """
+    directory = os.path.dirname(manifest_path) or "."
+    payload = json.dumps(record, indent=2)
+    tmp_path = os.path.join(
+        directory, f".{RUN_MANIFEST_NAME}.tmp.{os.getpid()}.{time.time_ns()}"
+    )
+
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.write(payload)
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            os.link(tmp_path, manifest_path)
+            return True
+        except FileExistsError:
+            return False
+        except OSError:
+            # A filesystem without hard links.  Fall back to exclusive create;
+            # the empty-file window is back, but the retrying reader covers it.
+            try:
+                with open(manifest_path, "x", encoding="utf-8") as f:
+                    f.write(payload)
+                    f.flush()
+                    os.fsync(f.fileno())
+                return True
+            except FileExistsError:
+                return False
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
+def _read_manifest(manifest_path):
+    """
+    Read the manifest, waiting out a writer that has not finished publishing it.
+
+    Returns the parsed record, or None if the file is not there (or no longer
+    there) -- the caller then goes back to trying to create it itself.  Raises
+    if the file stays unreadable, which at that point means a leftover truncated
+    manifest rather than a race, and is fixed by deleting it.
+    """
+    reason = "the file is empty"
+    for attempt in range(MANIFEST_READ_ATTEMPTS):
+        try:
+            with open(manifest_path, encoding="utf-8") as f:
+                text = f.read()
+        except FileNotFoundError:
+            return None
+
+        if text.strip():
+            try:
+                existing = json.loads(text)
+            except json.JSONDecodeError as exc:
+                reason = f"the file is not valid JSON ({exc})"
+            else:
+                if isinstance(existing, dict):
+                    return existing
+                reason = f"the file holds a {type(existing).__name__}, not an object"
+
+        if attempt + 1 < MANIFEST_READ_ATTEMPTS:
+            time.sleep(MANIFEST_READ_DELAY_S)
+
+    raise RuntimeError(
+        f"Could not read the run manifest '{manifest_path}': {reason}, and it "
+        f"stayed that way for "
+        f"{MANIFEST_READ_ATTEMPTS * MANIFEST_READ_DELAY_S:.0f}s. It is left over "
+        f"from a run that died while writing it. Delete the file and resubmit; "
+        f"the reconstructions next to it are unaffected."
+    )
+
+
 def claim_output_dir(output_dir, fingerprint):
     """
     Stamp the shared output directory with this run's configuration, or verify
@@ -504,6 +597,10 @@ def claim_output_dir(output_dir, fingerprint):
     interleave their reconstructions -- and afterwards nothing would show it,
     because the files are named by Rico ID, not by what produced them.  So the
     first task to arrive writes the fingerprint and everybody else has to match.
+
+    All shards of an array reach this within the same second, so both halves are
+    written for that: publishing is atomic (see _write_manifest_exclusively) and
+    reading is patient (see _read_manifest).
     """
     os.makedirs(output_dir, exist_ok=True)
     manifest_path = os.path.join(output_dir, RUN_MANIFEST_NAME)
@@ -511,17 +608,23 @@ def claim_output_dir(output_dir, fingerprint):
     record = dict(fingerprint)
     record["created_at"] = datetime.now().isoformat(timespec="seconds")
 
-    try:
-        # "x" is O_CREAT|O_EXCL: exactly one of the tasks starting at the same
-        # moment creates the file, the rest fall through to the check below.
-        with open(manifest_path, "x", encoding="utf-8") as f:
-            json.dump(record, f, indent=2)
-        return record
-    except FileExistsError:
-        pass
-
-    with open(manifest_path, encoding="utf-8") as f:
-        existing = json.load(f)
+    existing = None
+    # Two rounds, because the manifest can be deleted between the failed create
+    # and the read -- a cleanup running alongside the array, say.  One retry is
+    # enough to settle that; a repeat means somebody is churning the file and
+    # the run should stop rather than guess which configuration won.
+    for _ in range(2):
+        if _write_manifest_exclusively(manifest_path, record):
+            return record
+        existing = _read_manifest(manifest_path)
+        if existing is not None:
+            break
+    else:
+        raise RuntimeError(
+            f"The run manifest '{manifest_path}' keeps appearing and "
+            f"disappearing while this shard starts up. Make sure nothing else "
+            f"is clearing the output directory, then resubmit."
+        )
 
     mismatched = {
         key: (existing.get(key), value)
