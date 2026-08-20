@@ -122,7 +122,7 @@ def get_hpc_slurm_directives(jobname: str, num_tasks: int):
                  else "#SBATCH --error=output_%j.txt")
 
     sbatch_header = f"""\
-#SBATCH -J {PROJECT_NAME}_{jobname}       # job name
+#SBATCH -J s2v_reconstruction_worker
 {output_str}            # output file (merged stdout and stderr)
 {error_str}             # error file (redirected to output file)
 #SBATCH --mail-type=FAIL
@@ -211,7 +211,7 @@ def create_aggregate_sbatch_script(path, array_job_id, task_dir):
     mails the result.  CPU only: it just parses report files.
     """
     script_content = f"""#!/bin/bash
-#SBATCH -J {PROJECT_NAME}_recon_aggregate
+#SBATCH -J s2v_reconstruction_agg
 #SBATCH --output=output_agg_%j.txt
 #SBATCH --error=output_agg_%j.txt
 #SBATCH --mail-type=ALL

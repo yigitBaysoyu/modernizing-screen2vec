@@ -129,7 +129,7 @@ def get_hpc_slurm_directives(jobname: str):
     exclusive_str = "#SBATCH --exclusive" if run_exclusive else ""
 
     sbatch_header = f"""\
-#SBATCH -J {PROJECT_NAME}_{jobname}       # job name
+#SBATCH -J s2v_reconstruction_sweep      # job name
 #SBATCH --output=output_%j.txt            # output file (merged stdout and stderr)
 #SBATCH --error=output_%j.txt             # error file (redirected to output file)
 #SBATCH --mail-type=ALL

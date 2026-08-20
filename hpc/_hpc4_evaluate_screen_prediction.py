@@ -61,7 +61,7 @@ def get_hpc_slurm_directives(jobname: str, num_tasks: int):
     error_str = "#SBATCH --error=output_%A_%a.txt" if num_tasks > 1 else "#SBATCH --error=output_%j.txt"
 
     sbatch_header = f"""\
-#SBATCH -J {PROJECT_NAME}_{jobname}       # job name
+#SBATCH -J s2       # job name
 {output_str}            # output file (merged stdout and stderr)
 {error_str}             # error file (redirected to output file)
 #SBATCH --mail-type=ALL
