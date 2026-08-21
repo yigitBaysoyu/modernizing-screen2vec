@@ -25,6 +25,14 @@ Usage:
     python 4_evaluate_screen_prediction.py \\
         --embeddings_dir embeddings_seq_768 \\
         --lstm_model lstm_predictor_768d.pth
+
+    # Screen2Vec's own protocol end to end. --strict must be used for BOTH
+    # training and evaluation; the checkpoint is suffixed _strict so it
+    # cannot clobber a permissive run:
+    python 8_train_lstm_predictor.py --embeddings_dir embeddings_seq_768 --strict
+    python 4_evaluate_screen_prediction.py \\
+        --embeddings_dir embeddings_seq_768 \\
+        --lstm_model lstm_predictor_768d_strict.pth --strict
 """
 
 import argparse
@@ -111,8 +119,16 @@ def load_all_embeddings(embeddings_dir: str):
     return id_to_idx, matrix
 
 
-def parse_traces(traces_dir: str, available_ids: set):
-    """Parse RICO interaction traces in parallel, returning list of screen-id lists."""
+def parse_traces(traces_dir: str, available_ids: set, min_trace_len: int = 3):
+    """Parse RICO interaction traces in parallel, returning list of screen-id lists.
+
+    min_trace_len: traces with fewer screens are skipped. Default 3 keeps the
+    permissive behaviour; --strict passes n_predictors + 1, matching
+    Screen2Vec's RicoDataset (dataset.py:28,166). With that filter every
+    training window has exactly n_predictors context screens, so the
+    zero-padding branch in compute_loss_batch never fires and training matches
+    what 4_evaluate_screen_prediction.py --strict feeds the model at test time.
+    """
     traces_root = Path(traces_dir)
     if not traces_root.exists():
         raise FileNotFoundError(f"Traces directory not found: {traces_dir}")
@@ -144,7 +160,7 @@ def parse_traces(traces_dir: str, available_ids: set):
                 continue
             if sid in available_ids:
                 screen_ids.append(sid)
-        if len(screen_ids) < 3:
+        if len(screen_ids) < min_trace_len:
             return None
         return screen_ids
 
@@ -174,6 +190,7 @@ def compute_loss_batch(
     device: torch.device,
     n_predictors: int = 4,
     temperature: float = 0.07,
+    neg_pool_indices: torch.Tensor = None,
 ) -> torch.Tensor:
     """
     Screen2Vec's training loss:
@@ -188,6 +205,12 @@ def compute_loss_batch(
         - CrossEntropy: the correct index is 0 (the target)
 
     This exactly mirrors Screen2Vec's pretrainer.py iteration() method.
+
+    neg_pool_indices: if given, random negatives are drawn only from these
+    embedding rows. Screen2Vec samples negatives from its ScreenVocab, which
+    is built from the *filtered* dataset (vocab.py:12-20), so screens outside
+    the eligible traces are never negatives. Default None keeps sampling from
+    the full embedding matrix.
     """
     B = len(batch_traces)
     embed_dim = emb_tensor.shape[1]
@@ -232,8 +255,13 @@ def compute_loss_batch(
     pos_dot = torch.mm(predictions, targets.T)           # (B, B)
     # diagonal is the correct (positive) pair
 
-    # 2. Random negative sample from full vocab
-    neg_indices = torch.randint(0, emb_tensor.shape[0], (neg_sample_size,))
+    # 2. Random negative sample from the vocab
+    if neg_pool_indices is None:
+        neg_indices = torch.randint(0, emb_tensor.shape[0], (neg_sample_size,))
+    else:
+        neg_indices = neg_pool_indices[
+            torch.randint(0, neg_pool_indices.shape[0], (neg_sample_size,))
+        ]
     neg_embs = emb_tensor[neg_indices].to(device)        # (neg_sample_size, D)
     neg_dot = torch.mm(predictions, neg_embs.T)          # (B, neg_sample_size)
 
@@ -292,7 +320,15 @@ def main():
     parser.add_argument("--temperature", type=float, default=0.07,
                         help="InfoNCE temperature parameter")
     parser.add_argument("--output", type=str, default=None,
-                        help="Output .pth path (default: lstm_predictor_{dim}d.pth)")
+                        help="Output .pth path (default: lstm_predictor_{dim}d.pth, "
+                             "or lstm_predictor_{dim}d_strict.pth with --strict)")
+    parser.add_argument("--strict", action="store_true",
+                        help="Train on Screen2Vec's own population: only traces "
+                             "with >= n_predictors+1 screens (so every window has "
+                             "exactly n_predictors context screens and no "
+                             "zero-padding is needed), and draw random negatives "
+                             "only from the screens of those traces. Off by "
+                             "default; the default behaviour is unchanged.")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
@@ -308,7 +344,17 @@ def main():
     # ---------------------------------------------------------------
     id_to_idx, emb_matrix = load_all_embeddings(args.embeddings_dir)
     available_ids = set(id_to_idx.keys())
-    traces = parse_traces(args.traces_dir, available_ids)
+    min_trace_len = (args.n_predictors + 1) if args.strict else 3
+    traces = parse_traces(args.traces_dir, available_ids, min_trace_len)
+
+    # Strict: negatives come only from the screens of the eligible traces,
+    # matching Screen2Vec's ScreenVocab (vocab.py:12-20).
+    neg_pool_indices = None
+    if args.strict:
+        eligible = sorted({id_to_idx[sid] for trace in traces for sid in trace})
+        neg_pool_indices = torch.tensor(eligible, dtype=torch.long)
+        print(f"  STRICT: traces >= {min_trace_len} screens, "
+              f"negative pool = {len(eligible)} of {len(id_to_idx)} screens")
 
     embed_dim = emb_matrix.shape[1]
     emb_tensor = torch.from_numpy(emb_matrix)  # (N, D) on CPU
@@ -320,7 +366,9 @@ def main():
     print(f"  Embed dim: {embed_dim}  |  Traces: {len(traces)}  |  Screens: {len(id_to_idx)}")
 
     if args.output is None:
-        args.output = f"lstm_predictor_{embed_dim}d.pth"
+        # Suffix the strict artefact so it cannot clobber a permissive run.
+        args.output = (f"lstm_predictor_{embed_dim}d_strict.pth" if args.strict
+                       else f"lstm_predictor_{embed_dim}d.pth")
 
     # ---------------------------------------------------------------
     # 2. Train / val split
@@ -370,6 +418,7 @@ def main():
             loss = compute_loss_batch(
                 predictor, emb_tensor, batch, id_to_idx,
                 args.neg_samp, device, args.n_predictors, args.temperature,
+                neg_pool_indices=neg_pool_indices,
             )
 
             optimizer.zero_grad()
@@ -396,6 +445,7 @@ def main():
                 loss = compute_loss_batch(
                     predictor, emb_tensor, batch, id_to_idx,
                     args.neg_samp // 8, device, args.n_predictors, args.temperature,
+                    neg_pool_indices=neg_pool_indices,
                 )
                 val_loss_sum += loss.item()
                 val_batches += 1
@@ -446,7 +496,9 @@ def main():
     print(f"\nNext step — evaluate with:")
     print(f"  python 4_evaluate_screen_prediction.py \\")
     print(f"    --embeddings_dir {args.embeddings_dir} \\")
-    print(f"    --lstm_model {args.output}")
+    print(f"    --lstm_model {args.output}" + (" \\" if args.strict else ""))
+    if args.strict:
+        print(f"    --strict")
 
 
 if __name__ == "__main__":

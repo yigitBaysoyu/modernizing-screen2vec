@@ -8,6 +8,13 @@ from pathlib import Path
 
 
 # ==============================================================================
+# 1) EVALUATION SETTINGS
+# ==============================================================================
+STRICT = False  # True -> pass --strict to 4_evaluate_screen_prediction.py
+                # (Screen2Vec's own evaluation population). Remember to point
+                # EMBEDDINGS_DIR/LSTM_MODEL below at the _strict artefacts.
+
+# ==============================================================================
 # 2) HPC SETTINGS
 # ==============================================================================
 SCRATCH_ROOT = "/lustre/scratch/sgjolieb-screen2vec" if not platform.system() == "Windows" else "C:\\Users\\Jonathan\\Dev"
@@ -100,6 +107,7 @@ def create_master_sbatch_script(path, total_array_elements):
     """
     script_name = "4_evaluate_screen_prediction.py"
     sbatch_header = get_hpc_slurm_directives(script_name, total_array_elements)
+    strict_arg = " --strict" if STRICT else ""
 
     script_content = f"""#!/bin/bash
 {sbatch_header}
@@ -124,7 +132,7 @@ pip install -r requirements.txt
 srun python hpc/env.py
 
 # EXECUTE MAIN WORKLOAD
-srun python 4_evaluate_screen_prediction.py --embeddings_dir embeddings_seq_768_with_app --lstm_model lstm_predictor_768d.pth
+srun python 4_evaluate_screen_prediction.py --embeddings_dir embeddings_seq_768_with_app --lstm_model lstm_predictor_768d.pth{strict_arg}
 
 # Copy merged log from the submission directory to this task's hpc folder
 JOB_ID_STR="${{SLURM_ARRAY_JOB_ID:-$SLURM_JOB_ID}}"

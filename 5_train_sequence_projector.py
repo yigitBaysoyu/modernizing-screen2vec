@@ -19,6 +19,12 @@ Usage:
 
     # Then evaluate:
     python 4_evaluate_screen_prediction.py --embeddings_dir embeddings_seq_128
+
+    # Screen2Vec's own trace population (--strict must be used for BOTH
+    # training and evaluation; artefacts get a _strict suffix):
+    python 5_train_sequence_projector.py --proj_dim 128 --strict
+    python 4_evaluate_screen_prediction.py \\
+        --embeddings_dir embeddings_seq_128_strict --strict
 """
 
 import argparse
@@ -114,8 +120,19 @@ def load_all_embeddings(embeddings_dir: str):
     return id_to_idx, matrix
 
 
-def parse_traces(traces_dir: str, available_ids: set):
-    """Parse RICO interaction traces, returning list of screen-id lists."""
+def parse_traces(traces_dir: str, available_ids: set, min_trace_len: int = 3):
+    """Parse RICO interaction traces, returning list of screen-id lists.
+
+    min_trace_len: traces with fewer screens are skipped. Default 3 keeps the
+    permissive behaviour; --strict passes n_predictors + 1, matching
+    Screen2Vec's RicoDataset (dataset.py:28,166).
+
+    Note that this script's InfoNCE objective is leave-one-out over the whole
+    trace (a random target, all remaining screens as context), not the causal
+    n_predictors window used by 8_/9_. --strict therefore only aligns the
+    trace population and the negative pool here; it cannot make this objective
+    match Screen2Vec's windowed one. Use 9_train_joint.py --strict for that.
+    """
     traces_root = Path(traces_dir)
     if not traces_root.exists():
         raise FileNotFoundError(f"Traces directory not found: {traces_dir}")
@@ -147,12 +164,12 @@ def parse_traces(traces_dir: str, available_ids: set):
                 if sid in available_ids:
                     screen_ids.append(sid)
 
-            if len(screen_ids) < 3:
+            if len(screen_ids) < min_trace_len:
                 skipped += 1
                 continue
             traces.append(screen_ids)
 
-    print(f"  {len(traces)} traces, skipped {skipped} with < 3 screens")
+    print(f"  {len(traces)} traces, skipped {skipped} with < {min_trace_len} screens")
     return traces
 
 
@@ -284,11 +301,26 @@ def main():
         help="Output directory for projected embeddings "
              "(default: embeddings_seq_{proj_dim})",
     )
+    parser.add_argument(
+        "--n_predictors", type=int, default=4,
+        help="Screen2Vec's context window size, used only to derive the "
+             "strict minimum trace length (Screen2Vec uses 4)",
+    )
+    parser.add_argument(
+        "--strict", action="store_true",
+        help="Restrict training to Screen2Vec's own population: only traces "
+             "with >= n_predictors+1 screens. Artefacts get a _strict suffix "
+             "so they cannot clobber a permissive run. Off by default; the "
+             "default behaviour is unchanged.",
+    )
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
+    # Suffix strict artefacts so a strict run cannot overwrite a permissive one.
+    strict_suffix = "_strict" if args.strict else ""
+
     if args.output_dir is None:
-        args.output_dir = f"embeddings_seq_{args.proj_dim}"
+        args.output_dir = f"embeddings_seq_{args.proj_dim}{strict_suffix}"
 
     # Reproducibility
     random.seed(args.seed)
@@ -306,7 +338,8 @@ def main():
     # -----------------------------------------------------------------
     id_to_idx, emb_matrix = load_all_embeddings(args.embeddings_dir)
     available_ids = set(id_to_idx.keys())
-    traces = parse_traces(args.traces_dir, available_ids)
+    min_trace_len = (args.n_predictors + 1) if args.strict else 3
+    traces = parse_traces(args.traces_dir, available_ids, min_trace_len)
 
     input_dim = emb_matrix.shape[1]
     emb_tensor = torch.from_numpy(emb_matrix)  # keep on CPU, slice to device
@@ -481,14 +514,14 @@ def main():
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
 
-    plot_path = f"projector_training_{args.proj_dim}d.png"
+    plot_path = f"projector_training_{args.proj_dim}d{strict_suffix}.png"
     plt.savefig(plot_path, dpi=150)
     print(f"Saved training plot: {plot_path}")
 
     # -----------------------------------------------------------------
     # 7. Save model checkpoint
     # -----------------------------------------------------------------
-    model_path = f"sequence_projector_{args.proj_dim}d.pth"
+    model_path = f"sequence_projector_{args.proj_dim}d{strict_suffix}.pth"
     torch.save(
         {
             "state_dict": projector.state_dict(),
@@ -503,7 +536,8 @@ def main():
     elapsed = time.time() - start_time
     print(f"\nTotal time: {elapsed:.1f}s")
     print(f"\nNext step - evaluate with:")
-    print(f"  python 4_evaluate_screen_prediction.py --embeddings_dir {args.output_dir}")
+    print(f"  python 4_evaluate_screen_prediction.py --embeddings_dir {args.output_dir}"
+          + (" --strict" if args.strict else ""))
 
 
 if __name__ == "__main__":

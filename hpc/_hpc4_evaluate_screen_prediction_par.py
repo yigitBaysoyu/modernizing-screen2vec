@@ -18,6 +18,9 @@ NUM_NODES = 10
 EMBEDDINGS_DIR = "embeddings_seq_768_with_app"
 LSTM_MODEL = "lstm_predictor_768d.pth"       # Set to None for mean-of-context baseline
 LABEL = None                                  # Custom label for the results table (auto-detected if None)
+STRICT = False                                # True -> pass --strict to every worker
+                                              # (Screen2Vec's own evaluation population).
+                                              # Must be the same for all workers in a run.
 
 # ==============================================================================
 # 2) HPC SETTINGS
@@ -132,6 +135,7 @@ def create_worker_sbatch_script(path, total_array_elements):
 
     # Build the python command line
     lstm_arg = f"--lstm_model {LSTM_MODEL}" if LSTM_MODEL else ""
+    strict_arg = "--strict" if STRICT else ""
 
     script_content = f"""#!/bin/bash
 {sbatch_header}
@@ -156,7 +160,7 @@ pip install -r requirements.txt
 srun python hpc/env.py
 
 # EXECUTE MAIN WORKLOAD (worker mode — reads trace split from job.json)
-srun python {script_name} --embeddings_dir {EMBEDDINGS_DIR} {lstm_arg} --job_json job.json
+srun python {script_name} --embeddings_dir {EMBEDDINGS_DIR} {lstm_arg} {strict_arg} --job_json job.json
 """
 
     with open(path, "w") as f:
@@ -170,12 +174,13 @@ def create_aggregate_sbatch_script(path, array_job_id, results_dir, task_dir):
     computes the final metrics, and sends the results via email.
     """
     # Determine label for the results table
+    strict_suffix = " [strict]" if STRICT else ""
     if LABEL:
         label_for_table = LABEL
     elif LSTM_MODEL:
-        label_for_table = ">>> Qwen3-VL + LSTM (Ours) <<<"
+        label_for_table = f">>> Qwen3-VL + LSTM (Ours){strict_suffix} <<<"
     else:
-        label_for_table = ">>> Qwen3-VL-Embedding (Ours) <<<"
+        label_for_table = f">>> Qwen3-VL-Embedding (Ours){strict_suffix} <<<"
 
     lstm_mode_arg = f"--lstm_model {LSTM_MODEL}" if LSTM_MODEL else ""
 

@@ -13,10 +13,30 @@ Two prediction modes:
   - LSTM (--lstm_model): runs context through a trained LSTM predictor,
     matching Screen2Vec's exact evaluation protocol
 
+Two evaluation protocols:
+  - Permissive (default, --strict absent): traces with >= 3 screens, context
+    of 1..n_predictors screens, candidate pool = every embedding in
+    --embeddings_dir, top-k%% thresholds rounded up.
+  - Strict (--strict): reproduces the evaluation population of Screen2Vec's
+    own modeltester.py / dataset.py:
+      * only traces with >= n_predictors + 1 screens   (dataset.py:28,67)
+      * only full windows: exactly n_predictors context screens per
+        prediction, sliding over the trace                (dataset.py:29-37)
+      * candidate pool restricted to the screens of those eligible traces
+        (vocab.py:74-94 builds the pool from the filtered dataset)
+      * top-k%% thresholds truncated with int(), not ceil (modeltester.py:141)
+    Note that --strict cannot reproduce Screen2Vec's *screen ordering*: the
+    original builds each trace from an unsorted os.listdir() of the
+    view_hierarchies directory (UI_embedding/precompute_embeddings.py:72),
+    which is not temporal order. This script always uses gestures.json order,
+    which is true temporal order.
+
 Usage:
     python 4_evaluate_screen_prediction.py [--embeddings_dir DIR] [--traces_dir DIR]
     python 4_evaluate_screen_prediction.py --embeddings_dir embeddings_seq_768 \\
         --lstm_model lstm_predictor_768d.pth
+    python 4_evaluate_screen_prediction.py --embeddings_dir embeddings_seq_768_with_app_strict \\
+        --lstm_model lstm_predictor_768d_strict.pth --strict
 """
 
 import argparse
@@ -156,10 +176,14 @@ def load_all_embeddings(embeddings_dir: str):
 # ============================================================================
 # 2. Parse RICO Interaction Traces
 # ============================================================================
-def parse_traces(traces_dir: str, available_ids: set):
+def parse_traces(traces_dir: str, available_ids: set, min_trace_len: int = 3):
     """
     Walk filtered_traces/<app>/trace_N/gestures.json to extract ordered
     screen sequences. Only keeps screens that have embeddings available.
+
+    min_trace_len: traces with fewer screens are skipped. Default 3 keeps the
+    permissive behaviour; the strict protocol passes n_predictors + 1, which
+    is what Screen2Vec's RicoDataset requires (dataset.py:28,67).
 
     Returns list of traces, where each trace is a list of screen_id (int).
     """
@@ -200,7 +224,7 @@ def parse_traces(traces_dir: str, available_ids: set):
                 if sid in available_ids:
                     screen_ids.append(sid)
 
-            if len(screen_ids) < 3:
+            if len(screen_ids) < min_trace_len:
                 skipped_short += 1
                 continue
 
@@ -208,8 +232,33 @@ def parse_traces(traces_dir: str, available_ids: set):
             total_screens_in_traces += len(screen_ids)
 
     print(f"  Parsed {len(traces)} traces ({total_screens_in_traces} screens)")
-    print(f"  Skipped {skipped_short} traces with < 3 screens")
+    print(f"  Skipped {skipped_short} traces with < {min_trace_len} screens")
     return traces
+
+
+def restrict_pool_to_traces(traces, id_to_idx, embedding_matrix,
+                            embedding_matrix_normed, norms):
+    """
+    Restrict the retrieval pool to the screens contained in `traces`.
+
+    Screen2Vec builds its candidate pool from the *filtered* dataset
+    (vocab.py:74-94 iterates dataset.traces, which RicoDataset has already
+    filtered), so screens that live only in ineligible traces are never
+    retrieval candidates. The permissive default keeps every embedding in the
+    directory, which makes the pool larger and the ranking harder.
+
+    Returns freshly indexed (id_to_idx, matrix, normed_matrix, norms).
+    """
+    keep_ids = sorted({sid for trace in traces for sid in trace})
+    keep_idx = np.array([id_to_idx[sid] for sid in keep_ids], dtype=np.int64)
+
+    new_id_to_idx = {sid: i for i, sid in enumerate(keep_ids)}
+    return (
+        new_id_to_idx,
+        embedding_matrix[keep_idx],
+        embedding_matrix_normed[keep_idx],
+        norms[keep_idx],
+    )
 
 
 # ============================================================================
@@ -226,13 +275,20 @@ def eval_single_trace(
     k_5pct,
     lstm_predictor=None,
     n_predictors=4,
+    strict=False,
 ):
     """Evaluates prediction metrics for a single RICO interaction trace.
 
     Instead of leaving one out from the whole trace (which gives future context),
-    this strictly evaluates predicting the *next* screen given the *previous* 
+    this strictly evaluates predicting the *next* screen given the *previous*
     screens (up to n_predictors), matching Screen2Vec's modeltester.py and the
     causal nature of the LSTM.
+
+    strict=False (default): predicts screens 1..T-1, so the first n_predictors
+    predictions run on a truncated context of 1..n_predictors-1 screens.
+    strict=True: only full windows, i.e. predicts screens n_predictors..T-1
+    with exactly n_predictors context screens each, which is what
+    TesterRicoDataset.get_item_part (dataset.py:34-45) yields.
     """
     trace_indices = [id_to_idx[sid] for sid in trace]
     trace_normed = embedding_matrix_normed[trace_indices]  # (T, D)
@@ -242,16 +298,22 @@ def eval_single_trace(
     if T < 2:
         return T, 0.0, 0, 0, 0, 0, 0
 
-    # We evaluate predictions for screens i = 1 to T-1
+    # Permissive: evaluate predictions for screens i = 1 to T-1.
+    # Strict: only full windows, i.e. i = n_predictors to T-1.
+    first_target = n_predictors if strict else 1
+
     sq_err_sum = 0.0
+    n_instances = 0
     hits_top1 = 0
     hits_top001pct = 0
     hits_top01pct = 0
     hits_top1pct = 0
     hits_top5pct = 0
 
-    for i in range(1, T):
+    for i in range(first_target, T):
+        n_instances += 1
         # Context is up to n_predictors previous screens
+        # (exactly n_predictors when strict, since i >= n_predictors there)
         start_idx = max(0, i - n_predictors)
         ctx_raw = trace_raw[start_idx:i]         # (ctx_len, D)
         ctx_normed = trace_normed[start_idx:i]   # (ctx_len, D)
@@ -303,7 +365,7 @@ def eval_single_trace(
         if rank <= k_1pct: hits_top1pct += 1
         if rank <= k_5pct: hits_top5pct += 1
 
-    return T - 1, sq_err_sum, hits_top1, hits_top001pct, hits_top01pct, hits_top1pct, hits_top5pct
+    return n_instances, sq_err_sum, hits_top1, hits_top001pct, hits_top01pct, hits_top1pct, hits_top5pct
 
 
 def evaluate_screen_prediction(
@@ -314,20 +376,33 @@ def evaluate_screen_prediction(
     norms: np.ndarray,
     n_jobs: int = -1,
     lstm_predictor=None,
+    strict: bool = False,
+    n_predictors: int = 4,
 ):
     """
-    For each screen in each trace, use all other screens in the trace as
-    context, average their (normalized) embeddings, and find the nearest
-    neighbour in the full embedding set. Record the rank of the true screen.
+    For each prediction instance in each trace, run the preceding screens
+    through the predictor and find the nearest neighbour in the candidate
+    pool. Record the rank of the true screen.
+
+    strict=True switches to Screen2Vec's own top-k%% truncation and full-window
+    instances; the caller is responsible for having restricted the pool.
     """
     N = embedding_matrix.shape[0]
 
-    # Top-k% thresholds (matching the paper)
-    k_001pct = max(1, math.ceil(0.0001 * N))  # ~7
-    k_01pct = max(1, math.ceil(0.001 * N))    # ~67
-    k_1pct = max(1, math.ceil(0.01 * N))      # ~663
-    k_5pct = max(1, math.ceil(0.05 * N))      # ~3314
+    # Top-k% thresholds. Screen2Vec truncates when slicing the candidate list
+    # (modeltester.py:141-146: temp[:int(0.0001 * comp_len)]); the permissive
+    # default rounds up instead.
+    round_k = int if strict else math.ceil
+    k_001pct = max(1, round_k(0.0001 * N))  # ~7
+    k_01pct = max(1, round_k(0.001 * N))    # ~67
+    k_1pct = max(1, round_k(0.01 * N))      # ~663
+    k_5pct = max(1, round_k(0.05 * N))      # ~3314
 
+    # Announced only under --strict, so the default output stays byte-identical
+    # to the pre---strict version of this script.
+    if strict:
+        print(f"\n  Protocol: STRICT (Screen2Vec modeltester.py population, "
+              f"exactly {n_predictors} context screens per prediction)")
     print(f"\n  Total screens in embedding index: {N}")
     print(f"  Top-0.01% threshold: k={k_001pct}")
     print(f"  Top-0.1%  threshold: k={k_01pct}")
@@ -345,6 +420,7 @@ def evaluate_screen_prediction(
             delayed(eval_single_trace)(
                 trace, id_to_idx, embedding_matrix, embedding_matrix_normed,
                 k_001pct, k_01pct, k_1pct, k_5pct, lstm_predictor=lstm_predictor,
+                n_predictors=n_predictors, strict=strict,
             )
             for trace in tqdm(traces, desc="Evaluating traces (LSTM)")
         )
@@ -355,6 +431,7 @@ def evaluate_screen_prediction(
             delayed(eval_single_trace)(
                 trace, id_to_idx, embedding_matrix, embedding_matrix_normed,
                 k_001pct, k_01pct, k_1pct, k_5pct, lstm_predictor=None,
+                n_predictors=n_predictors, strict=strict,
             )
             for trace in tqdm(traces, desc="Evaluating traces")
         )
@@ -484,6 +561,18 @@ def main():
         "--sample_fraction", type=float, default=None,
         help="Sample a fraction of RICO traces for evaluation (e.g., 0.1 for 10% sample)",
     )
+    parser.add_argument(
+        "--n_predictors", type=int, default=4,
+        help="Number of context screens used per prediction (Screen2Vec uses 4)",
+    )
+    parser.add_argument(
+        "--strict", action="store_true",
+        help="Use Screen2Vec's own evaluation population: traces with "
+             ">= n_predictors+1 screens, exactly n_predictors context screens "
+             "per prediction, candidate pool restricted to the screens of "
+             "those traces, and int()-truncated top-k%% thresholds. "
+             "Off by default; the default behaviour is unchanged.",
+    )
     args = parser.parse_args()
 
     start = time.time()
@@ -504,7 +593,18 @@ def main():
 
     # 2. Parse traces
     print("\n[Step 2/3] Parsing RICO interaction traces...")
-    traces = parse_traces(args.traces_dir, available_ids)
+    min_trace_len = (args.n_predictors + 1) if args.strict else 3
+    traces = parse_traces(args.traces_dir, available_ids, min_trace_len)
+
+    # Strict: the retrieval pool is the screens of the eligible traces only.
+    # Must happen before any sampling so the pool (and therefore the top-k%
+    # thresholds) is a pure function of the protocol, not of the trace subset.
+    if args.strict:
+        id_to_idx, emb_matrix, emb_normed, norms = restrict_pool_to_traces(
+            traces, id_to_idx, emb_matrix, emb_normed, norms
+        )
+        print(f"  Strict pool: restricted to {len(id_to_idx)} screens "
+              f"from eligible traces (was {len(available_ids)})")
 
     if args.sample_fraction is not None:
         np.random.seed(42)
@@ -518,15 +618,17 @@ def main():
     metrics = evaluate_screen_prediction(
         traces, id_to_idx, emb_matrix, emb_normed, norms,
         n_jobs=args.n_jobs, lstm_predictor=lstm_predictor,
+        strict=args.strict, n_predictors=args.n_predictors,
     )
 
     # Set label for output table
+    suffix = " [strict]" if args.strict else ""
     if args.label:
         metrics["label"] = args.label
     elif args.lstm_model:
-        metrics["label"] = ">>> Qwen3-VL + LSTM (Ours) <<<"
+        metrics["label"] = f">>> Qwen3-VL + LSTM (Ours){suffix} <<<"
     else:
-        metrics["label"] = ">>> Qwen3-VL-Embedding (Ours) <<<"
+        metrics["label"] = f">>> Qwen3-VL-Embedding (Ours){suffix} <<<"
 
     # 4. Print results
     print_comparison_table(metrics)

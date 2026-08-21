@@ -37,6 +37,17 @@ Usage:
     python 4_evaluate_screen_prediction.py \\
         --embeddings_dir embeddings_seq_768_with_app \\
         --lstm_model lstm_predictor_768d.pth
+
+    # Screen2Vec's own protocol end to end. --strict must be used for BOTH
+    # training and evaluation; every artefact gets a _strict suffix so it
+    # cannot clobber a permissive run:
+    python 9_train_joint.py --proj_dim 768 --strict
+    python 6_generate_app_context_embeddings.py \\
+        --embeddings_dir embeddings_seq_768_strict \\
+        --output_dir embeddings_seq_768_strict_with_app
+    python 4_evaluate_screen_prediction.py \\
+        --embeddings_dir embeddings_seq_768_strict_with_app \\
+        --lstm_model lstm_predictor_768d_strict.pth --strict
 """
 
 import argparse
@@ -137,8 +148,16 @@ def load_all_embeddings(embeddings_dir: str):
     return id_to_idx, matrix
 
 
-def parse_traces(traces_dir: str, available_ids: set):
-    """Parse RICO interaction traces in parallel, returning list of screen-id lists."""
+def parse_traces(traces_dir: str, available_ids: set, min_trace_len: int = 3):
+    """Parse RICO interaction traces in parallel, returning list of screen-id lists.
+
+    min_trace_len: traces with fewer screens are skipped. Default 3 keeps the
+    permissive behaviour; --strict passes n_predictors + 1, matching
+    Screen2Vec's RicoDataset (dataset.py:28,166). With that filter every
+    training window has exactly n_predictors context screens, so the
+    zero-padding branch in compute_joint_loss never fires and training matches
+    what 4_evaluate_screen_prediction.py --strict feeds the model at test time.
+    """
     traces_root = Path(traces_dir)
     if not traces_root.exists():
         raise FileNotFoundError(f"Traces directory not found: {traces_dir}")
@@ -169,7 +188,7 @@ def parse_traces(traces_dir: str, available_ids: set):
                 continue
             if sid in available_ids:
                 screen_ids.append(sid)
-        if len(screen_ids) < 3:
+        if len(screen_ids) < min_trace_len:
             return None
         return screen_ids
 
@@ -199,6 +218,7 @@ def compute_joint_loss(
     device: torch.device,
     n_predictors: int = 4,
     temperature: float = 0.07,
+    neg_pool_indices: torch.Tensor = None,
 ) -> torch.Tensor:
     """
     Joint loss that projects raw embeddings through the projector on-the-fly,
@@ -210,6 +230,12 @@ def compute_joint_loss(
 
     Key difference from step 8: Instead of looking up pre-computed embeddings
     (which has no gradient), we forward-pass through the projector each time.
+
+    neg_pool_indices: if given, random negatives are drawn only from these
+    embedding rows. Screen2Vec samples negatives from its ScreenVocab, which
+    is built from the *filtered* dataset (vocab.py:12-20), so screens outside
+    the eligible traces are never negatives. Default None keeps sampling from
+    the full embedding matrix.
     """
     B = len(batch_traces)
 
@@ -262,8 +288,13 @@ def compute_joint_loss(
     # 1. Positive: prediction vs all targets → (B, B), diagonal = positive
     pos_dot = torch.mm(predictions, targets.T)  # (B, B)
 
-    # 2. Random negative sample from full vocab (also projected)
-    neg_indices = torch.randint(0, raw_emb_tensor.shape[0], (neg_sample_size,))
+    # 2. Random negative sample from the vocab (also projected)
+    if neg_pool_indices is None:
+        neg_indices = torch.randint(0, raw_emb_tensor.shape[0], (neg_sample_size,))
+    else:
+        neg_indices = neg_pool_indices[
+            torch.randint(0, neg_pool_indices.shape[0], (neg_sample_size,))
+        ]
     raw_neg = raw_emb_tensor[neg_indices].to(device)    # (neg_sample_size, 4096)
     proj_neg = projector(raw_neg)                        # (neg_sample_size, D)
     neg_dot = torch.mm(predictions, proj_neg.T)          # (B, neg_sample_size)
@@ -333,11 +364,22 @@ def main():
                         help="Early stopping patience (epochs)")
     parser.add_argument("--temperature", type=float, default=0.07,
                         help="InfoNCE temperature parameter")
+    parser.add_argument("--strict", action="store_true",
+                        help="Train on Screen2Vec's own population: only traces "
+                             "with >= n_predictors+1 screens (so every window has "
+                             "exactly n_predictors context screens and no "
+                             "zero-padding is needed), and draw random negatives "
+                             "only from the screens of those traces. Artefacts get "
+                             "a _strict suffix so they cannot clobber a permissive "
+                             "run. Off by default; default behaviour is unchanged.")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
+    # Suffix strict artefacts so a strict run cannot overwrite a permissive one.
+    strict_suffix = "_strict" if args.strict else ""
+
     if args.output_dir is None:
-        args.output_dir = f"embeddings_seq_{args.proj_dim}"
+        args.output_dir = f"embeddings_seq_{args.proj_dim}{strict_suffix}"
 
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -352,7 +394,17 @@ def main():
     # ------------------------------------------------------------------
     id_to_idx, raw_matrix = load_all_embeddings(args.raw_embeddings_dir)
     available_ids = set(id_to_idx.keys())
-    traces = parse_traces(args.traces_dir, available_ids)
+    min_trace_len = (args.n_predictors + 1) if args.strict else 3
+    traces = parse_traces(args.traces_dir, available_ids, min_trace_len)
+
+    # Strict: negatives come only from the screens of the eligible traces,
+    # matching Screen2Vec's ScreenVocab (vocab.py:12-20).
+    neg_pool_indices = None
+    if args.strict:
+        eligible = sorted({id_to_idx[sid] for trace in traces for sid in trace})
+        neg_pool_indices = torch.tensor(eligible, dtype=torch.long)
+        print(f"  STRICT: traces >= {min_trace_len} screens, "
+              f"negative pool = {len(eligible)} of {len(id_to_idx)} screens")
 
     input_dim = raw_matrix.shape[1]
     raw_emb_tensor = torch.from_numpy(raw_matrix)  # (N, 4096) — stays on CPU
@@ -422,6 +474,7 @@ def main():
             loss = compute_joint_loss(
                 projector, predictor, raw_emb_tensor, batch, id_to_idx,
                 args.neg_samp, device, args.n_predictors, args.temperature,
+                neg_pool_indices=neg_pool_indices,
             )
 
             optimizer.zero_grad()
@@ -450,6 +503,7 @@ def main():
                 loss = compute_joint_loss(
                     projector, predictor, raw_emb_tensor, batch, id_to_idx,
                     args.neg_samp // 8, device, args.n_predictors, args.temperature,
+                    neg_pool_indices=neg_pool_indices,
                 )
                 val_loss_sum += loss.item()
                 val_batches += 1
@@ -522,7 +576,7 @@ def main():
     # 7. Save model checkpoints
     # ------------------------------------------------------------------
     # LSTM (same format as step 8, compatible with 4_evaluate_screen_prediction.py)
-    lstm_path = f"lstm_predictor_{args.proj_dim}d.pth"
+    lstm_path = f"lstm_predictor_{args.proj_dim}d{strict_suffix}.pth"
     torch.save(
         {
             "state_dict": predictor.state_dict(),
@@ -536,7 +590,7 @@ def main():
     print(f"Saved LSTM predictor: {lstm_path}")
 
     # Projector
-    proj_path = f"sequence_projector_{args.proj_dim}d.pth"
+    proj_path = f"sequence_projector_{args.proj_dim}d{strict_suffix}.pth"
     torch.save(
         {
             "state_dict": projector.state_dict(),
@@ -561,7 +615,7 @@ def main():
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
 
-    plot_path = f"joint_training_{args.proj_dim}d.png"
+    plot_path = f"joint_training_{args.proj_dim}d{strict_suffix}.png"
     plt.savefig(plot_path, dpi=150)
     print(f"Saved training plot: {plot_path}")
 
@@ -575,7 +629,9 @@ def main():
     print(f"")
     print(f"  python 4_evaluate_screen_prediction.py \\")
     print(f"    --embeddings_dir {args.output_dir}_with_app \\")
-    print(f"    --lstm_model {lstm_path}")
+    print(f"    --lstm_model {lstm_path}" + (" \\" if args.strict else ""))
+    if args.strict:
+        print(f"    --strict")
 
 
 if __name__ == "__main__":
