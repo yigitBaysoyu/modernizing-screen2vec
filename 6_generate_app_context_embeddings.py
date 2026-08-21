@@ -8,6 +8,8 @@ from tqdm import tqdm
 import torch
 from transformers import AutoModel, AutoTokenizer
 
+import trace_index
+
 # Standard helper to split activity name from utils
 def parse_activity_name(activity_name):
     if not activity_name:
@@ -46,6 +48,12 @@ def main():
     parser.add_argument(
         "--layouts_dir", type=str, default="../rico-data/data/layouts",
         help="Path to RICO layouts directory",
+    )
+    parser.add_argument(
+        "--trace_index", type=str, default=trace_index.DEFAULT_INDEX_PATH,
+        help="Trace->layout index CSV from 0_build_trace_index.py. Required: "
+             "trace gestures.json keys are per-trace indices, not the global "
+             "layouts ids the embeddings are keyed by.",
     )
     parser.add_argument(
         "--description_col", type=str, default="gp_description",
@@ -101,34 +109,23 @@ def main():
     print(f"Found {len(npz_files)} projected screen embeddings.")
 
     # 3. Map screen IDs to app packages
-    print("Mapping screen IDs to app package names from traces...")
-    screen_to_app = {}
-    traces_root = Path(args.traces_dir)
-    if traces_root.exists():
-        app_dirs = sorted(traces_root.iterdir())
-        for app_dir in tqdm(app_dirs, desc="Parsing traces for app packages"):
-            if not app_dir.is_dir():
-                continue
-            app_pkg = app_dir.name
-            for trace_dir in sorted(app_dir.iterdir()):
-                if not trace_dir.is_dir() or not trace_dir.name.startswith("trace_"):
-                    continue
-                gestures_path = trace_dir / "gestures.json"
-                if not gestures_path.exists():
-                    continue
-                try:
-                    with open(gestures_path, "r", encoding="utf-8") as f:
-                        gestures = json.load(f)
-                    for key in gestures.keys():
-                        try:
-                            sid = int(key)
-                            screen_to_app[sid] = app_pkg
-                        except ValueError:
-                            continue
-                except Exception:
-                    continue
-
-    print(f"Mapped {len(screen_to_app)} screens via traces.")
+    #
+    # This MUST go through the trace->layout index. A trace's gestures.json
+    # keys are per-trace indices, not the global layouts ids the embeddings
+    # are keyed by, so assigning screen_to_app[int(gesture_key)] attributes
+    # each app's screens to unrelated ids (and, because those ids collide
+    # across traces, whichever app is parsed last wins). See trace_index.py.
+    #
+    # The index is also what makes the attribution *correct* rather than just
+    # consistent: Screen2Vec describes a screen by the Play Store entry of the
+    # app whose trace it came from, and the traced app differs from the
+    # activity's own task package for ~8% of screens (ad activities,
+    # cross-app screens). Only the index knows which trace a screen came from.
+    print("Mapping screen IDs to app package names via the trace->layout index...")
+    index = trace_index.load_index(args.trace_index)
+    screen_to_app = trace_index.layout_id_to_app(index)
+    print(f"Mapped {len(screen_to_app)} screens via the trace->layout index "
+          f"('{args.trace_index}').")
 
     # Resolve fallbacks for missing screens via layout JSON files in parallel
     from concurrent.futures import ThreadPoolExecutor

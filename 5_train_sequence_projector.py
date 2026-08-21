@@ -44,6 +44,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm
 
+import trace_index
+
 
 # ============================================================================
 # Model
@@ -120,8 +122,14 @@ def load_all_embeddings(embeddings_dir: str):
     return id_to_idx, matrix
 
 
-def parse_traces(traces_dir: str, available_ids: set, min_trace_len: int = 3):
-    """Parse RICO interaction traces, returning list of screen-id lists.
+def parse_traces(traces_dir: str, available_ids: set, index: dict,
+                 min_trace_len: int = 3):
+    """Parse RICO interaction traces, returning list of layouts-id lists.
+
+    index: the trace->layout index from trace_index.load_index(). A trace's
+    gestures.json keys are per-trace indices, NOT the global layouts ids the
+    embeddings are keyed by, so every key must be resolved through it. See
+    trace_index.py for why.
 
     min_trace_len: traces with fewer screens are skipped. Default 3 keeps the
     permissive behaviour; --strict passes n_predictors + 1, matching
@@ -139,6 +147,7 @@ def parse_traces(traces_dir: str, available_ids: set, min_trace_len: int = 3):
 
     traces = []
     skipped = 0
+    unresolved_screens = 0
 
     for app_dir in tqdm(sorted(traces_root.iterdir()), desc="Parsing traces"):
         if not app_dir.is_dir():
@@ -158,11 +167,15 @@ def parse_traces(traces_dir: str, available_ids: set, min_trace_len: int = 3):
             screen_ids = []
             for key in gestures.keys():
                 try:
-                    sid = int(key)
+                    screen_key = int(key)
                 except ValueError:
                     continue
-                if sid in available_ids:
-                    screen_ids.append(sid)
+                layout_id = index.get((app_dir.name, trace_dir.name, screen_key))
+                if layout_id is None:
+                    unresolved_screens += 1
+                    continue
+                if layout_id in available_ids:
+                    screen_ids.append(layout_id)
 
             if len(screen_ids) < min_trace_len:
                 skipped += 1
@@ -170,6 +183,9 @@ def parse_traces(traces_dir: str, available_ids: set, min_trace_len: int = 3):
             traces.append(screen_ids)
 
     print(f"  {len(traces)} traces, skipped {skipped} with < {min_trace_len} screens")
+    if unresolved_screens:
+        print(f"  Skipped {unresolved_screens} screens absent from the "
+              f"trace->layout index")
     return traces
 
 
@@ -307,6 +323,12 @@ def main():
              "strict minimum trace length (Screen2Vec uses 4)",
     )
     parser.add_argument(
+        "--trace_index", type=str, default=trace_index.DEFAULT_INDEX_PATH,
+        help="Trace->layout index CSV from 0_build_trace_index.py. Required: "
+             "trace gestures.json keys are per-trace indices, not the global "
+             "layouts ids the embeddings are keyed by.",
+    )
+    parser.add_argument(
         "--strict", action="store_true",
         help="Restrict training to Screen2Vec's own population: only traces "
              "with >= n_predictors+1 screens. Artefacts get a _strict suffix "
@@ -338,8 +360,11 @@ def main():
     # -----------------------------------------------------------------
     id_to_idx, emb_matrix = load_all_embeddings(args.embeddings_dir)
     available_ids = set(id_to_idx.keys())
+    index = trace_index.load_index(args.trace_index)
+    print(f"  Loaded trace->layout index: {len(index)} screens "
+          f"('{args.trace_index}')")
     min_trace_len = (args.n_predictors + 1) if args.strict else 3
-    traces = parse_traces(args.traces_dir, available_ids, min_trace_len)
+    traces = parse_traces(args.traces_dir, available_ids, index, min_trace_len)
 
     input_dim = emb_matrix.shape[1]
     emb_tensor = torch.from_numpy(emb_matrix)  # keep on CPU, slice to device

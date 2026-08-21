@@ -62,7 +62,4 @@ adapter_model_out_embeddings_8x4096_avg/lora_adapter_20260801_034527/README.md
 /archive
 /archive2
 /archive3-gut
-component_data/vocab_emb.npy
-component_data/vocab.json
-component_data/meta.json
-component_data/components.jsonl.gz
+/component_data

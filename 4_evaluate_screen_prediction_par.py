@@ -51,6 +51,8 @@ from sklearn.metrics.pairwise import cosine_similarity
 from tqdm import tqdm
 from joblib import Parallel, delayed
 
+import trace_index
+
 
 # ============================================================================
 # LSTM Predictor (must match 8_train_lstm_predictor.py exactly)
@@ -171,16 +173,22 @@ def load_all_embeddings(embeddings_dir: str):
 # ============================================================================
 # 2. Parse RICO Interaction Traces
 # ============================================================================
-def parse_traces(traces_dir: str, available_ids: set, min_trace_len: int = 3):
+def parse_traces(traces_dir: str, available_ids: set, index: dict,
+                 min_trace_len: int = 3):
     """
     Walk filtered_traces/<app>/trace_N/gestures.json to extract ordered
     screen sequences. Only keeps screens that have embeddings available.
+
+    index: the trace->layout index from trace_index.load_index(). A trace's
+    gestures.json keys are per-trace indices, NOT the global layouts ids the
+    embeddings are keyed by, so every key must be resolved through it. See
+    trace_index.py for why.
 
     min_trace_len: traces with fewer screens are skipped. Default 3 keeps the
     permissive behaviour; the strict protocol passes n_predictors + 1, which
     is what Screen2Vec's RicoDataset requires (dataset.py:28,67).
 
-    Returns list of traces, where each trace is a list of screen_id (int).
+    Returns list of traces, where each trace is a list of layouts ids (int).
     """
     traces_root = Path(traces_dir)
     if not traces_root.exists():
@@ -189,6 +197,7 @@ def parse_traces(traces_dir: str, available_ids: set, min_trace_len: int = 3):
     traces = []
     skipped_short = 0
     total_screens_in_traces = 0
+    unresolved_screens = 0
 
     app_dirs = sorted(traces_root.iterdir())
     for app_dir in tqdm(app_dirs, desc="Parsing traces"):
@@ -208,16 +217,21 @@ def parse_traces(traces_dir: str, available_ids: set, min_trace_len: int = 3):
             except (json.JSONDecodeError, UnicodeDecodeError):
                 continue
 
-            # Keys of the gestures dict are screen IDs in trace order
-            # (Python 3.7+ dicts preserve insertion order)
+            # Keys of the gestures dict are per-trace screen indices in trace
+            # order (Python 3.7+ dicts preserve insertion order). They must be
+            # resolved to global layouts ids before touching the embeddings.
             screen_ids = []
             for key in gestures.keys():
                 try:
-                    sid = int(key)
+                    screen_key = int(key)
                 except ValueError:
                     continue
-                if sid in available_ids:
-                    screen_ids.append(sid)
+                layout_id = index.get((app_dir.name, trace_dir.name, screen_key))
+                if layout_id is None:
+                    unresolved_screens += 1
+                    continue
+                if layout_id in available_ids:
+                    screen_ids.append(layout_id)
 
             if len(screen_ids) < min_trace_len:
                 skipped_short += 1
@@ -228,6 +242,9 @@ def parse_traces(traces_dir: str, available_ids: set, min_trace_len: int = 3):
 
     print(f"  Parsed {len(traces)} traces ({total_screens_in_traces} screens)")
     print(f"  Skipped {skipped_short} traces with < {min_trace_len} screens")
+    if unresolved_screens:
+        print(f"  Skipped {unresolved_screens} screens absent from the "
+              f"trace->layout index")
     return traces
 
 
@@ -722,6 +739,12 @@ def main():
         help="Number of context screens used per prediction (Screen2Vec uses 4)",
     )
     parser.add_argument(
+        "--trace_index", type=str, default=trace_index.DEFAULT_INDEX_PATH,
+        help="Trace->layout index CSV from 0_build_trace_index.py. Required: "
+             "trace gestures.json keys are per-trace indices, not the global "
+             "layouts ids the embeddings are keyed by.",
+    )
+    parser.add_argument(
         "--strict", action="store_true",
         help="Use Screen2Vec's own evaluation population: traces with "
              ">= n_predictors+1 screens, exactly n_predictors context screens "
@@ -791,8 +814,11 @@ def main():
 
     # 2. Parse traces
     print("\n[Step 2/3] Parsing RICO interaction traces...")
+    index = trace_index.load_index(args.trace_index)
+    print(f"  Loaded trace->layout index: {len(index)} screens "
+          f"('{args.trace_index}')")
     min_trace_len = (args.n_predictors + 1) if args.strict else 3
-    traces = parse_traces(args.traces_dir, available_ids, min_trace_len)
+    traces = parse_traces(args.traces_dir, available_ids, index, min_trace_len)
 
     # Strict: the retrieval pool is the screens of the eligible traces only.
     # This runs on the FULL trace list, before the worker shard slice below,

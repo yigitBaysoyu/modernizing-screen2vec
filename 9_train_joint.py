@@ -68,6 +68,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm
 
+import trace_index
+
 
 # ============================================================================
 # Models (same architectures as steps 5 and 8)
@@ -148,8 +150,14 @@ def load_all_embeddings(embeddings_dir: str):
     return id_to_idx, matrix
 
 
-def parse_traces(traces_dir: str, available_ids: set, min_trace_len: int = 3):
-    """Parse RICO interaction traces in parallel, returning list of screen-id lists.
+def parse_traces(traces_dir: str, available_ids: set, index: dict,
+                 min_trace_len: int = 3):
+    """Parse RICO interaction traces in parallel, returning layouts-id lists.
+
+    index: the trace->layout index from trace_index.load_index(). A trace's
+    gestures.json keys are per-trace indices, NOT the global layouts ids the
+    embeddings are keyed by, so every key must be resolved through it. See
+    trace_index.py for why.
 
     min_trace_len: traces with fewer screens are skipped. Default 3 keeps the
     permissive behaviour; --strict passes n_predictors + 1, matching
@@ -180,14 +188,18 @@ def parse_traces(traces_dir: str, available_ids: set, min_trace_len: int = 3):
                 gestures = json.load(f)
         except Exception:
             return None
+        app_name = trace_dir.parent.name
         screen_ids = []
         for key in gestures.keys():
             try:
-                sid = int(key)
+                screen_key = int(key)
             except ValueError:
                 continue
-            if sid in available_ids:
-                screen_ids.append(sid)
+            layout_id = index.get((app_name, trace_dir.name, screen_key))
+            if layout_id is None:
+                continue
+            if layout_id in available_ids:
+                screen_ids.append(layout_id)
         if len(screen_ids) < min_trace_len:
             return None
         return screen_ids
@@ -364,6 +376,12 @@ def main():
                         help="Early stopping patience (epochs)")
     parser.add_argument("--temperature", type=float, default=0.07,
                         help="InfoNCE temperature parameter")
+    parser.add_argument("--trace_index", type=str,
+                        default=trace_index.DEFAULT_INDEX_PATH,
+                        help="Trace->layout index CSV from "
+                             "0_build_trace_index.py. Required: trace "
+                             "gestures.json keys are per-trace indices, not the "
+                             "global layouts ids the embeddings are keyed by.")
     parser.add_argument("--strict", action="store_true",
                         help="Train on Screen2Vec's own population: only traces "
                              "with >= n_predictors+1 screens (so every window has "
@@ -394,8 +412,11 @@ def main():
     # ------------------------------------------------------------------
     id_to_idx, raw_matrix = load_all_embeddings(args.raw_embeddings_dir)
     available_ids = set(id_to_idx.keys())
+    index = trace_index.load_index(args.trace_index)
+    print(f"  Loaded trace->layout index: {len(index)} screens "
+          f"('{args.trace_index}')")
     min_trace_len = (args.n_predictors + 1) if args.strict else 3
-    traces = parse_traces(args.traces_dir, available_ids, min_trace_len)
+    traces = parse_traces(args.traces_dir, available_ids, index, min_trace_len)
 
     # Strict: negatives come only from the screens of the eligible traces,
     # matching Screen2Vec's ScreenVocab (vocab.py:12-20).
