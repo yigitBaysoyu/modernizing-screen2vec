@@ -164,9 +164,6 @@ def main(json_path, image_path, model, processor, num_pool_tokens=POOL_TOKENS, p
         print(f"Error: JSON file not found at {json_path}")
         return None
 
-    with open(json_path, 'r', encoding='utf-8') as f:
-        json_content = f.read()
-
     # 2. Check for Image
     if not os.path.exists(image_path):
         print(f"Error: Image not found at {image_path}")
