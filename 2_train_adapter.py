@@ -12,11 +12,13 @@
 import os
 import json
 import argparse
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from tqdm import tqdm
+from contextlib import ExitStack
 from datetime import datetime
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import get_peft_model, LoraConfig, TaskType
@@ -66,9 +68,25 @@ class AdapterConfig:
     max_target_len = 4096
     grad_accum_steps = 4  # Gradient accumulation steps
 
+    # Throughput optimisations, off by default so the default path reproduces
+    # earlier sweeps exactly. Overridden from --fast in main(). See
+    # FAST_PATH_NOTES under parse_args() for what it does and does not change.
+    fast = False
+
 
 EMBEDDINGS_DIR = "embeddings_4096_last"
 OUTPUT_DIR = "adapter_model_out"
+
+
+def str2bool(value):
+    """argparse type for a flag that also accepts an explicit true/false value."""
+    if isinstance(value, bool):
+        return value
+    if value.lower() in ("true", "t", "yes", "y", "1"):
+        return True
+    if value.lower() in ("false", "f", "no", "n", "0"):
+        return False
+    raise argparse.ArgumentTypeError(f"Expected a boolean value, got '{value}'.")
 
 
 def parse_args():
@@ -89,7 +107,59 @@ def parse_args():
              f"(default: {OUTPUT_DIR}). Give each sweep run its own directory "
              "so the checkpoints do not overwrite each other.",
     )
+    parser.add_argument(
+        "--fast", type=str2bool, nargs="?", const=True, default=False,
+        help=(
+            "Enable the throughput optimisations (default: off). They are "
+            "arithmetically equivalent to the default path -- they only remove "
+            "redundant work -- but the default stays bit-for-bit the old code "
+            "so a sweep can be reproduced exactly. See FAST_PATH_NOTES."
+        ),
+    )
     return parser.parse_args()
+
+
+# =============================================================================
+# FAST_PATH_NOTES -- what --fast changes, and why it does not change results
+# =============================================================================
+# Everything below is gated on cfg.fast and leaves the --fast=false path
+# untouched.  Three sources of avoidable overhead, none of which touches the
+# gradients, the sample order, or the number of optimizer steps:
+#
+# 1.  Gradient all-reduce on every micro-step.  Accelerator() is constructed
+#     with gradient_accumulation_steps, but the training loop never enters the
+#     accelerator.accumulate() context, so accelerator.sync_gradients stays True
+#     and every accelerator.backward() triggers a full all-reduce over all
+#     ranks -- for the LoRA parameters *and* the projector, grad_accum_steps
+#     times more often than needed.  The fast path wraps the non-boundary
+#     micro-steps in accelerator.no_sync(), which is the pattern PyTorch
+#     documents for DDP gradient accumulation: the local .grad tensors keep
+#     accumulating, and the reducer on the boundary step all-reduces the
+#     accumulated total.  Averaging a sum equals summing the averages, so the
+#     resulting gradient is the same up to floating-point associativity.
+#
+#     The boundary must include the *last* sample of the epoch even when it
+#     falls into a short trailing group, otherwise the flush below would step
+#     on gradients that were never all-reduced and the ranks would silently
+#     drift apart.  shard_for_process() gives every rank the same number of
+#     rows, so every rank picks the same boundaries without communicating.
+#
+# 2.  A .item() per sample.  Reading the loss back on the host synchronises the
+#     CPU with the GPU on every single step, so the CPU can never queue the
+#     next forward while the current one is still running.  The fast path
+#     accumulates the loss in a float64 GPU scalar instead and reads it once
+#     per epoch.  float64 rather than the loss's own float32 because the value
+#     feeds the early-stopping comparison, and a float32 running sum over
+#     thousands of samples would drift away from the Python float accumulation
+#     of the default path far enough to matter at the margin.
+#
+# 3.  Re-tokenizing every target in every epoch.  build_target_column() already
+#     caches the cleaned JSON, but the tokenizer still ran over all of it once
+#     per epoch, single-threaded, in the critical path of the training loop.
+#     The fast path tokenizes once, up front, with the exact same call the loop
+#     used, and stores the ids as int32 (~150 MB for the full Rico set, against
+#     ~1 GB for Python lists).  The token budget filter above it is left
+#     completely alone, so --fast trains on exactly the same set of samples.
 
 
 # =============================================================================
@@ -270,11 +340,16 @@ def fits_token_budget(target_json, tokenizer, max_target_len):
     return n_tokens + 1 <= max_target_len
 
 
-def build_target_column(embeddings, accelerator, tokenizer, max_target_len):
+def build_target_column(embeddings, accelerator, tokenizer, max_target_len, fast=False):
     """
     Pre-computes the cleaned target JSON for every row and drops the rows that
     cannot serve as a training target -- either because the JSON is unusable,
     or because it does not fit in `max_target_len` tokens.
+
+    With `fast`, also pre-computes the target token ids in a "target-ids"
+    column, so the training loop does not re-tokenize the whole dataset once
+    per epoch.  This runs *after* the filter and never feeds back into it, so
+    the set of surviving rows is identical either way.
 
     Dropping the over-long ones matters more than it looks.  The training loop
     tokenizes `target_json + eos_token` with truncation, and the tokenizer
@@ -340,6 +415,29 @@ def build_target_column(embeddings, accelerator, tokenizer, max_target_len):
             )
         print(f"Kept {len(prepared)} of {len(embeddings)} samples.")
 
+    if fast:
+        # Exactly the call the training loop used to make per sample and per
+        # epoch, so the ids are the ones it would have produced. Stored as
+        # int32 because the Python lists the tokenizer returns cost roughly
+        # seven times the memory, on every rank.
+        prepared["target-ids"] = [
+            np.asarray(
+                tokenizer(
+                    target_json + tokenizer.eos_token,
+                    truncation=True,
+                    max_length=max_target_len,
+                    padding=False,
+                ).input_ids,
+                dtype=np.int32,
+            )
+            for target_json in tqdm(
+                prepared["target-json"],
+                total=len(prepared),
+                desc="Tokenizing targets",
+                disable=not accelerator.is_local_main_process,
+            )
+        ]
+
     return prepared
 
 
@@ -366,17 +464,48 @@ def shard_for_process(embeddings, accelerator):
     return embeddings.iloc[:usable].iloc[accelerator.process_index::world_size]
 
 
+def encode_target_ids(row, tokenizer, cfg, device):
+    """
+    [1, seq_len] target token ids for one row, with EOS appended so the model
+    learns when to stop.
+
+    With cfg.fast the ids come from the column build_target_column() filled in
+    once; otherwise they are produced here, per sample and per epoch, by the
+    call the training loop has always made. Both paths yield the same ids --
+    see FAST_PATH_NOTES (3).
+    """
+    if cfg.fast:
+        return torch.from_numpy(row["target-ids"]).long().unsqueeze(0).to(device)
+
+    target_enc = tokenizer(
+        row["target-json"] + tokenizer.eos_token,
+        return_tensors="pt",
+        truncation=True,
+        max_length=cfg.max_target_len,
+        padding=False,
+    ).to(device)
+    return target_enc.input_ids  # [1, seq_len]
+
+
 # =============================================================================
 # Main Training Pipeline
 # =============================================================================
 def main():
     args = parse_args()
     cfg = AdapterConfig()
+    cfg.fast = args.fast
     accelerator = Accelerator(gradient_accumulation_steps=cfg.grad_accum_steps)
     device = accelerator.device
     if accelerator.is_local_main_process:
         print(f"Using device: {device} (Distributed across {accelerator.num_processes} processes)")
         print(f"Embeddings: {args.embeddings_dir} | Output: {args.output_dir}")
+        if cfg.fast:
+            print(
+                "Fast path: on (cached target ids, deferred loss readback, "
+                "all-reduce only on optimizer steps)"
+            )
+        else:
+            print("Fast path: off (unchanged reference path)")
 
     # -------------------------------------------------------------------------
     # 1. Load pre-computed embeddings
@@ -440,7 +569,7 @@ def main():
     # Resolve and cache the target JSON up front, so the per-rank row counts
     # below cannot diverge later inside the training loop.
     all_embeddings = build_target_column(
-        all_embeddings, accelerator, tokenizer, cfg.max_target_len
+        all_embeddings, accelerator, tokenizer, cfg.max_target_len, fast=cfg.fast
     )
 
     # Without this the run would "succeed" doing nothing: every loop below is
@@ -547,7 +676,16 @@ def main():
         projector.train()
 
         epoch_loss = 0.0
+        # See FAST_PATH_NOTES (2): the running loss lives on the GPU so the
+        # loop never has to synchronise with the host to read it.
+        epoch_loss_gpu = (
+            torch.zeros((), device=device, dtype=torch.float64) if cfg.fast else None
+        )
         valid_samples = 0
+        # Same on every rank (shard_for_process equalises the shards), so the
+        # gradient-sync boundaries below are picked identically without
+        # communicating.
+        n_train = len(train_embeddings)
         optimizer.zero_grad()
 
         # --- TRAINING LOOP ---
@@ -560,57 +698,66 @@ def main():
                         f"| Loss: {avg_loss:.6f}"
                 ),
         ):
-            # Target: cleaned, minified JSON, resolved once by build_target_column().
-            # Never skip a row here — that would desynchronise the ranks.
-            target_json = row["target-json"]
-
-            # Tokenize target (append EOS so the model learns when to stop)
-            target_enc = tokenizer(
-                target_json + tokenizer.eos_token,
-                return_tensors="pt",
-                truncation=True,
-                max_length=cfg.max_target_len,
-                padding=False,
-            ).to(device)
-            input_ids = target_enc.input_ids  # [1, seq_len]
-
-            # Project Qwen embedding -> prefix tokens
-            emb = torch.tensor(
-                row["embedding"], dtype=model_dtype
-            ).unsqueeze(0).to(device)
-            emb = F.normalize(emb, p=2, dim=-1)
-            prefix_embeds = projector(emb)  # [1, N, D]
-
-            # Target token embeddings from the LM's own embedding table
-            target_embeds = accelerator.unwrap_model(lm_model).get_input_embeddings()(input_ids)
-
-            # Concatenate: [prefix | target]
-            inputs_embeds = torch.cat([prefix_embeds, target_embeds], dim=1)
-
-            # Attention mask: every position is attended to
-            attn_mask = torch.ones(
-                1, inputs_embeds.size(1), device=device, dtype=torch.long
+            # See FAST_PATH_NOTES (1). The trailing group at the end of the
+            # epoch is a boundary too: the flush below steps on whatever has
+            # accumulated, so those gradients must have been all-reduced.
+            # DDP decides this in forward(), so the context has to cover the
+            # forward pass as well, not just the backward.
+            is_sync_step = (
+                (valid_samples + 1) % cfg.grad_accum_steps == 0
+                or (valid_samples + 1) == n_train
             )
 
-            # Labels: -100 for prefix (no loss), real IDs for target tokens.
-            # The prefix length follows the projector output, which depends on
-            # the embedding shape, so it must not be hardcoded to num_prefix_tokens.
-            prefix_labels = torch.full(
-                (1, prefix_embeds.size(1)), -100, device=device, dtype=torch.long
-            )
-            labels = torch.cat([prefix_labels, input_ids], dim=1)
+            with ExitStack() as no_sync_stack:
+                if cfg.fast and not is_sync_step:
+                    no_sync_stack.enter_context(accelerator.no_sync(lm_model))
+                    no_sync_stack.enter_context(accelerator.no_sync(projector))
 
-            # Forward pass through the LoRA-finetuned LM
-            outputs = lm_model(
-                inputs_embeds=inputs_embeds,
-                attention_mask=attn_mask,
-                labels=labels,
-            )
+                # Target: cleaned, minified JSON, resolved once by build_target_column().
+                # Never skip a row here — that would desynchronise the ranks.
+                input_ids = encode_target_ids(row, tokenizer, cfg, device)
 
-            loss = outputs.loss / cfg.grad_accum_steps
-            accelerator.backward(loss)
+                # Project Qwen embedding -> prefix tokens
+                emb = torch.tensor(
+                    row["embedding"], dtype=model_dtype
+                ).unsqueeze(0).to(device)
+                emb = F.normalize(emb, p=2, dim=-1)
+                prefix_embeds = projector(emb)  # [1, N, D]
+
+                # Target token embeddings from the LM's own embedding table
+                target_embeds = accelerator.unwrap_model(lm_model).get_input_embeddings()(input_ids)
+
+                # Concatenate: [prefix | target]
+                inputs_embeds = torch.cat([prefix_embeds, target_embeds], dim=1)
+
+                # Attention mask: every position is attended to
+                attn_mask = torch.ones(
+                    1, inputs_embeds.size(1), device=device, dtype=torch.long
+                )
+
+                # Labels: -100 for prefix (no loss), real IDs for target tokens.
+                # The prefix length follows the projector output, which depends on
+                # the embedding shape, so it must not be hardcoded to num_prefix_tokens.
+                prefix_labels = torch.full(
+                    (1, prefix_embeds.size(1)), -100, device=device, dtype=torch.long
+                )
+                labels = torch.cat([prefix_labels, input_ids], dim=1)
+
+                # Forward pass through the LoRA-finetuned LM
+                outputs = lm_model(
+                    inputs_embeds=inputs_embeds,
+                    attention_mask=attn_mask,
+                    labels=labels,
+                )
+
+                loss = outputs.loss / cfg.grad_accum_steps
+                accelerator.backward(loss)
+
             valid_samples += 1
-            epoch_loss += outputs.loss.item()
+            if cfg.fast:
+                epoch_loss_gpu += outputs.loss.detach().double()
+            else:
+                epoch_loss += outputs.loss.item()
 
             # Gradient accumulation step
             if valid_samples % cfg.grad_accum_steps == 0:
@@ -634,6 +781,10 @@ def main():
             optimizer.step()
             optimizer.zero_grad()
 
+        if cfg.fast:
+            # The single host synchronisation of the epoch.
+            epoch_loss = epoch_loss_gpu.item()
+
         avg_loss = epoch_loss / max(1, valid_samples)
         # Reduce loss across all processes
         avg_loss_tensor = torch.tensor(avg_loss, device=device)
@@ -646,6 +797,9 @@ def main():
         lm_model.eval()
         projector.eval()
         val_loss_total = 0.0
+        val_loss_gpu = (
+            torch.zeros((), device=device, dtype=torch.float64) if cfg.fast else None
+        )
         val_valid = 0
 
         with torch.no_grad():
@@ -656,16 +810,7 @@ def main():
                     leave=False,
                     disable=not accelerator.is_local_main_process,
             ):
-                target_json = row["target-json"]
-
-                target_enc = tokenizer(
-                    target_json + tokenizer.eos_token,
-                    return_tensors="pt",
-                    truncation=True,
-                    max_length=cfg.max_target_len,
-                    padding=False,
-                ).to(device)
-                input_ids = target_enc.input_ids
+                input_ids = encode_target_ids(row, tokenizer, cfg, device)
 
                 emb = torch.tensor(
                     row["embedding"], dtype=model_dtype
@@ -694,8 +839,14 @@ def main():
                     attention_mask=attn_mask,
                     labels=labels,
                 )
-                val_loss_total += outputs.loss.item()
+                if cfg.fast:
+                    val_loss_gpu += outputs.loss.detach().double()
+                else:
+                    val_loss_total += outputs.loss.item()
                 val_valid += 1
+
+        if cfg.fast:
+            val_loss_total = val_loss_gpu.item()
 
         avg_val_loss = val_loss_total / max(1, val_valid)
         # Reduce loss across all processes
