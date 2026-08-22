@@ -78,6 +78,12 @@ EMBEDDINGS_DIR = "embeddings_4096_last"
 OUTPUT_DIR = "adapter_model_out"
 
 
+def model_output_slug(lm_model_id):
+    """"Qwen/Qwen2.5-1.5B" -> "qwen2.5-1.5b", appended to output_dir so
+    checkpoints trained against different base LMs never collide."""
+    return lm_model_id.split("/")[-1].lower()
+
+
 def str2bool(value):
     """argparse type for a flag that also accepts an explicit true/false value."""
     if isinstance(value, bool):
@@ -494,6 +500,13 @@ def main():
     args = parse_args()
     cfg = AdapterConfig()
     cfg.fast = args.fast
+
+    # Tag the output dir with the base LM so checkpoints trained against
+    # different models never collide, e.g. "..._full" -> "..._full_qwen2.5-1.5b".
+    model_slug = model_output_slug(cfg.lm_model_id)
+    if not args.output_dir.endswith(model_slug):
+        args.output_dir = f"{args.output_dir}_{model_slug}"
+
     accelerator = Accelerator(gradient_accumulation_steps=cfg.grad_accum_steps)
     device = accelerator.device
     if accelerator.is_local_main_process:

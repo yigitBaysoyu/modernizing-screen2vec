@@ -26,10 +26,11 @@ JOBS_PER_BATCH = 10000
 # EMBEDDINGS_DIR = "embeddings_4096_last"
 EMBEDDINGS_DIR = "embeddings_8x4096_avg"
 
-# Any name works: start.sh exports it as $ADAPTER_OUTPUT_DIR and
-# hpc/mail.py:find_adapter_output_dir() reads it to decide whether to archive
-# and mail the checkpoints back.
-OUTPUT_DIR = f"adapter_model_out_{EMBEDDINGS_DIR}_full"
+## !!! MUSS AUCH IN 2_train_adapter.py::AdapterConfig EINGESTELLT WERDEN !!! ##
+MODEL_SLUG = "qwen2.5-1.5b"
+## !!! MUSS AUCH IN 2_train_adapter.py::AdapterConfig EINGESTELLT WERDEN !!! ##
+
+OUTPUT_DIR = f"adapter_model_out_{EMBEDDINGS_DIR}_full_{MODEL_SLUG}"
 
 # ==============================================================================
 # 2) HPC SETTINGS
