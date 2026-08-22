@@ -48,6 +48,20 @@ Usage:
     python 4_evaluate_screen_prediction.py \\
         --embeddings_dir embeddings_seq_768_strict_with_app \\
         --lstm_model lstm_predictor_768d_strict.pth --strict
+
+    # N-back protocol: predict a screen from exactly K preceding screens, i.e.
+    # the target is always the end of the context chain. --nback K must be used
+    # for BOTH training and evaluation; artefacts get a _nback{K} suffix:
+    python 9_train_joint.py --proj_dim 768 --nback 2
+    python 6_generate_app_context_embeddings.py \\
+        --embeddings_dir embeddings_seq_768_nback2 \\
+        --output_dir embeddings_seq_768_nback2_with_app
+    python 4_evaluate_screen_prediction.py \\
+        --embeddings_dir embeddings_seq_768_nback2_with_app \\
+        --lstm_model lstm_predictor_768d_nback2.pth --nback 2
+
+--nback and --strict are mutually exclusive: they are two different protocols,
+and --strict must keep reproducing Screen2Vec's exactly.
 """
 
 import argparse
@@ -161,10 +175,11 @@ def parse_traces(traces_dir: str, available_ids: set, index: dict,
 
     min_trace_len: traces with fewer screens are skipped. Default 3 keeps the
     permissive behaviour; --strict passes n_predictors + 1, matching
-    Screen2Vec's RicoDataset (dataset.py:28,166). With that filter every
-    training window has exactly n_predictors context screens, so the
-    zero-padding branch in compute_joint_loss never fires and training matches
-    what 4_evaluate_screen_prediction.py --strict feeds the model at test time.
+    Screen2Vec's RicoDataset (dataset.py:28,166), and --nback K passes K + 1.
+    With either filter every training window has exactly n_predictors context
+    screens, so the zero-padding branch in compute_joint_loss never fires and
+    training matches what 4_evaluate_screen_prediction.py --strict / --nback
+    feeds the model at test time.
     """
     traces_root = Path(traces_dir)
     if not traces_root.exists():
@@ -410,8 +425,8 @@ def main():
                         help="Learning rate (Screen2Vec uses 0.001)")
     parser.add_argument("--neg_samp", type=int, default=128,
                         help="Negative sample size (Screen2Vec uses 128)")
-    parser.add_argument("--n_predictors", type=int, default=4,
-                        help="Context window size (Screen2Vec uses 4)")
+    parser.add_argument("--n_predictors", type=int, default=None,
+                        help="Context window size (default: 4, as in Screen2Vec)")
     parser.add_argument("--val_fraction", type=float, default=0.1,
                         help="Fraction of traces held out for validation")
     parser.add_argument("--patience", type=int, default=15,
@@ -439,14 +454,44 @@ def main():
                              "only from the screens of those traces. Artefacts get "
                              "a _strict suffix so they cannot clobber a permissive "
                              "run. Off by default; default behaviour is unchanged.")
+    parser.add_argument("--nback", type=int, default=None, metavar="K",
+                        help="Train for the n-back protocol (alternative to "
+                             "--strict, mutually exclusive with it): only traces "
+                             "with >= K+1 screens, so every window has exactly K "
+                             "context screens and predicts the end of the chain, "
+                             "and random negatives are drawn only from the screens "
+                             "of those traces. Sets n_predictors = K. Artefacts get "
+                             "a _nback{K} suffix.")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
-    # Suffix strict artefacts so a strict run cannot overwrite a permissive one.
-    strict_suffix = "_strict" if args.strict else ""
+    # --nback and --strict are different protocols; --strict must keep
+    # reproducing Screen2Vec's exactly, so they cannot be combined.
+    if args.nback is not None:
+        if args.strict:
+            parser.error("--nback and --strict are mutually exclusive")
+        if args.nback < 1:
+            parser.error("--nback must be >= 1")
+        if args.n_predictors is not None and args.n_predictors != args.nback:
+            parser.error(
+                f"--n_predictors {args.n_predictors} contradicts --nback "
+                f"{args.nback}; --nback already sets the context length"
+            )
+        args.n_predictors = args.nback
+    elif args.n_predictors is None:
+        args.n_predictors = 4
+
+    # Suffix protocol artefacts so a strict or n-back run cannot overwrite a
+    # permissive one (nor each other).
+    if args.strict:
+        run_suffix = "_strict"
+    elif args.nback is not None:
+        run_suffix = f"_nback{args.nback}"
+    else:
+        run_suffix = ""
 
     if args.output_dir is None:
-        args.output_dir = f"embeddings_seq_{args.proj_dim}{strict_suffix}"
+        args.output_dir = f"embeddings_seq_{args.proj_dim}{run_suffix}"
 
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -464,16 +509,19 @@ def main():
     index = trace_index.load_index(args.trace_index)
     print(f"  Loaded trace->layout index: {len(index)} screens "
           f"('{args.trace_index}')")
-    min_trace_len = (args.n_predictors + 1) if args.strict else 3
+    full_windows = args.strict or args.nback is not None
+    min_trace_len = (args.n_predictors + 1) if full_windows else 3
     traces = parse_traces(args.traces_dir, available_ids, index, min_trace_len)
 
-    # Strict: negatives come only from the screens of the eligible traces,
-    # matching Screen2Vec's ScreenVocab (vocab.py:12-20).
+    # Strict and n-back: negatives come only from the screens of the eligible
+    # traces, matching Screen2Vec's ScreenVocab (vocab.py:12-20) and the
+    # restricted retrieval pool of 4_evaluate_screen_prediction.py.
     neg_pool_indices = None
-    if args.strict:
+    if full_windows:
         eligible = sorted({id_to_idx[sid] for trace in traces for sid in trace})
         neg_pool_indices = torch.tensor(eligible, dtype=torch.long)
-        print(f"  STRICT: traces >= {min_trace_len} screens, "
+        mode = "STRICT" if args.strict else f"NBACK (K={args.nback})"
+        print(f"  {mode}: traces >= {min_trace_len} screens, "
               f"negative pool = {len(eligible)} of {len(id_to_idx)} screens")
 
     input_dim = raw_matrix.shape[1]
@@ -649,7 +697,7 @@ def main():
     # 7. Save model checkpoints
     # ------------------------------------------------------------------
     # LSTM (same format as step 8, compatible with 4_evaluate_screen_prediction.py)
-    lstm_path = f"lstm_predictor_{args.proj_dim}d{strict_suffix}.pth"
+    lstm_path = f"lstm_predictor_{args.proj_dim}d{run_suffix}.pth"
     torch.save(
         {
             "state_dict": predictor.state_dict(),
@@ -663,7 +711,7 @@ def main():
     print(f"Saved LSTM predictor: {lstm_path}")
 
     # Projector
-    proj_path = f"sequence_projector_{args.proj_dim}d{strict_suffix}.pth"
+    proj_path = f"sequence_projector_{args.proj_dim}d{run_suffix}.pth"
     torch.save(
         {
             "state_dict": projector.state_dict(),
@@ -688,7 +736,7 @@ def main():
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
 
-    plot_path = f"joint_training_{args.proj_dim}d{strict_suffix}.png"
+    plot_path = f"joint_training_{args.proj_dim}d{run_suffix}.png"
     plt.savefig(plot_path, dpi=150)
     print(f"Saved training plot: {plot_path}")
 
@@ -702,9 +750,14 @@ def main():
     print(f"")
     print(f"  python 4_evaluate_screen_prediction.py \\")
     print(f"    --embeddings_dir {args.output_dir}_with_app \\")
-    print(f"    --lstm_model {lstm_path}" + (" \\" if args.strict else ""))
+    protocol_arg = ""
     if args.strict:
-        print(f"    --strict")
+        protocol_arg = "--strict"
+    elif args.nback is not None:
+        protocol_arg = f"--nback {args.nback}"
+    print(f"    --lstm_model {lstm_path}" + (" \\" if protocol_arg else ""))
+    if protocol_arg:
+        print(f"    {protocol_arg}")
 
 
 if __name__ == "__main__":
