@@ -34,6 +34,12 @@ try:
 except ImportError:
     _rapidfuzz_levenshtein = None
 
+# Optional: only needed for --json_repair.
+try:
+    import json_repair
+except ImportError:
+    json_repair = None
+
 from utils import process_json_file, CUDA_VISIBLE_DEVICE, load_embeddings
 
 os.environ["CUDA_VISIBLE_DEVICES"] = CUDA_VISIBLE_DEVICE
@@ -104,6 +110,27 @@ def calculate_levenshtein_distance(s1: str, s2: str) -> int:
         previous_row = current_row
 
     return previous_row[-1]
+
+
+def repair_json_str(pred_str):
+    """
+    Best-effort recovery of a prediction that does not parse, returned as a
+    JSON string so the existing evaluator can score it unchanged.
+
+    Returns None when nothing usable can be salvaged. The target schema is
+    always an object, so a list or scalar counts as unsalvageable -- see the
+    same guard in 3_json_reconstruction_par.py, which carries the measured
+    recovery rates.
+    """
+    if json_repair is None or not pred_str:
+        return None
+    try:
+        repaired = json_repair.loads(pred_str)
+    except Exception:
+        return None
+    if not isinstance(repaired, dict) or not repaired:
+        return None
+    return json.dumps(repaired, separators=(",", ":"))
 
 
 def evaluate_json_quality(pred_str, gt_str):
@@ -247,6 +274,14 @@ def main():
     parser.add_argument(
         "--full-output", action="store_true",
         help="Print only the reconstructed JSON string, suppressing metrics and logs",
+    )
+    parser.add_argument(
+        "--json_repair", action="store_true",
+        help=(
+            "Additionally score the prediction through json_repair when it "
+            "does not parse, and print the result under '(repaired)' labels. "
+            "The strict metrics above are left exactly as they were."
+        ),
     )
     parser.add_argument(
         "--lm_model_id", type=str, default=None,
@@ -424,6 +459,14 @@ def main():
     # -------------------------------------------------------------------------
     metrics = evaluate_json_quality(pred_json_str, gt_json_str)
 
+    # Scored a second time on the repaired string rather than folded into the
+    # numbers above: the strict metrics are what every report on disk holds.
+    repaired_metrics = None
+    if args.json_repair and not metrics["json_valid"]:
+        repaired_str = repair_json_str(pred_json_str)
+        if repaired_str is not None:
+            repaired_metrics = evaluate_json_quality(repaired_str, gt_json_str)
+
     # -------------------------------------------------------------------------
     # 6. Display results
     # -------------------------------------------------------------------------
@@ -482,6 +525,17 @@ def main():
     print(f"Component Count (Pred)             : {metrics['component_count_pred']}")
     print(f"Class Accuracy*                    : {metrics['class_accuracy']:.4f}")
     print(f"Average Bounds IoU*                : {metrics['avg_iou']:.4f}")
+    if args.json_repair:
+        print("-" * 50)
+        if repaired_metrics is None:
+            recovered = "Yes (already valid)" if metrics["json_valid"] else "No"
+            print(f"JSON Valid (repaired)              : {recovered}")
+        else:
+            print(f"JSON Valid (repaired)              : Yes")
+            print(f"Levenshtein Similarity (repaired)* : {repaired_metrics['levenshtein_similarity']:.4f} ")
+            print(f"Component Count (Pred, repaired)   : {repaired_metrics['component_count_pred']}")
+            print(f"Class Accuracy (repaired)*         : {repaired_metrics['class_accuracy']:.4f}")
+            print(f"Average Bounds IoU (repaired)*     : {repaired_metrics['avg_iou']:.4f}")
     print("="* 50)
     print("Note: * indicates that 1.0 is a perfect match.")
     print(f"Execution Time                     : {time.time() - start_time:.2f} seconds")
