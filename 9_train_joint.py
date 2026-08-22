@@ -220,6 +220,38 @@ def parse_traces(traces_dir: str, available_ids: set, index: dict,
 # ============================================================================
 # Joint Loss: CrossEntropy with Negative Sampling
 # ============================================================================
+# Sentinel used to pad the ragged hard-negative block. 0.0 is an ordinary
+# similarity value, so padding with it injects fake negatives whose count
+# scales with trace length; this value is mapped to zero weight by softmax.
+HARD_NEG_PAD = -1e4
+
+
+def select_trace_negatives(trace, id_to_idx, target_idx, ctx_indices, mode):
+    """
+    Pick the same-trace screens that go into the softmax denominator.
+
+    "context" reproduces Screen2Vec: pretrainer.py:106-107 computes
+    `neg_self_dot_products` against `context`, and prediction.py:38 defines
+    `context` as exactly the n_predictors screens that were fed to the LSTM.
+    Those screens remain in the evaluation candidate pool, so training against
+    them is what stops the predictor from simply reproducing the last context
+    screen.
+
+    "other" is the behaviour this repo used before 2026-08-22: the remaining
+    trace screens, with context excluded. "both" is the union.
+    """
+    if mode == "context":
+        return list(dict.fromkeys(i for i in ctx_indices if i != target_idx))
+    rest = sorted(
+        set(id_to_idx[sid] for sid in trace) - {target_idx} - set(ctx_indices)
+    )
+    if mode == "other":
+        return rest
+    if mode == "both":
+        return list(dict.fromkeys(i for i in ctx_indices if i != target_idx)) + rest
+    raise ValueError("unknown trace_negatives mode: %r" % (mode,))
+
+
 def compute_joint_loss(
     projector: SequenceProjector,
     predictor: LSTMPredictor,
@@ -231,6 +263,7 @@ def compute_joint_loss(
     n_predictors: int = 4,
     temperature: float = 0.07,
     neg_pool_indices: torch.Tensor = None,
+    trace_negatives: str = "context",
 ) -> torch.Tensor:
     """
     Joint loss that projects raw embeddings through the projector on-the-fly,
@@ -248,6 +281,12 @@ def compute_joint_loss(
     is built from the *filtered* dataset (vocab.py:12-20), so screens outside
     the eligible traces are never negatives. Default None keeps sampling from
     the full embedding matrix.
+
+    trace_negatives: which same-trace screens enter the softmax denominator as
+    hard negatives. "context" (default) uses the window's own context screens,
+    as Screen2Vec does (pretrainer.py:106-107 over prediction.py:38); "other"
+    uses the remaining trace screens and excludes context, the behaviour before
+    2026-08-22; "both" is the union. See select_trace_negatives.
     """
     B = len(batch_traces)
 
@@ -274,8 +313,9 @@ def compute_joint_loss(
         context_list.append(proj_ctx)
 
         # Same-trace hard negatives (also projected through projector)
-        all_trace_indices = set(id_to_idx[sid] for sid in trace)
-        hard_neg_indices = list(all_trace_indices - {target_idx} - set(ctx_indices))
+        hard_neg_indices = select_trace_negatives(
+            trace, id_to_idx, target_idx, ctx_indices, trace_negatives
+        )
         if hard_neg_indices:
             raw_hn = raw_emb_tensor[hard_neg_indices].to(device)          # (n_hn, 4096)
             proj_hn = projector(raw_hn)                                    # (n_hn, D)
@@ -311,17 +351,19 @@ def compute_joint_loss(
     proj_neg = projector(raw_neg)                        # (neg_sample_size, D)
     neg_dot = torch.mm(predictions, proj_neg.T)          # (B, neg_sample_size)
 
-    # 3. Hard negatives: same-trace screens
-    hard_dots = []
-    for i, hn in enumerate(same_trace_list):
-        if hn is not None:
-            hd = torch.mv(hn, predictions[i])   # (n_same,)
-            hard_dots.append(hd.unsqueeze(0))    # (1, n_same)
-    if hard_dots:
-        max_hn = max(h.shape[1] for h in hard_dots)
-        hard_padded = torch.zeros(B, max_hn, device=device)
-        for i, hd in enumerate(hard_dots):
-            hard_padded[i, : hd.shape[1]] = hd
+    # 3. Hard negatives: same-trace screens (Screen2Vec pretrainer.py:106-107)
+    # Row i of the block must belong to batch item i: a trace can yield no hard
+    # negatives (in "other" mode every trace of exactly n_predictors+1 screens
+    # does), and compacting those rows away would file one item's logits under
+    # another item's label.
+    max_hn = max((0 if hn is None else hn.shape[0]) for hn in same_trace_list)
+    if max_hn > 0:
+        hard_padded = torch.full(
+            (B, max_hn), HARD_NEG_PAD, device=device, dtype=pos_dot.dtype
+        )
+        for i, hn in enumerate(same_trace_list):
+            if hn is not None:
+                hard_padded[i, : hn.shape[0]] = torch.mv(hn, predictions[i])
         dot_products = torch.cat([pos_dot, neg_dot, hard_padded], dim=1)
     else:
         dot_products = torch.cat([pos_dot, neg_dot], dim=1)
@@ -376,6 +418,13 @@ def main():
                         help="Early stopping patience (epochs)")
     parser.add_argument("--temperature", type=float, default=0.07,
                         help="InfoNCE temperature parameter")
+    parser.add_argument("--trace_negatives", type=str, default="context",
+                        choices=["context", "other", "both"],
+                        help="Same-trace hard negatives. 'context': the "
+                             "window's own context screens, as in Screen2Vec's "
+                             "pretrainer.py:106-107 (default). 'other': the "
+                             "remaining trace screens, excluding context "
+                             "(behaviour before 2026-08-22). 'both': union.")
     parser.add_argument("--trace_index", type=str,
                         default=trace_index.DEFAULT_INDEX_PATH,
                         help="Trace->layout index CSV from "
@@ -477,6 +526,7 @@ def main():
     print(f"  Joint Training: {args.epochs} epochs, batch_size={args.batch_size}")
     print(f"  neg_samp={args.neg_samp}, n_predictors={args.n_predictors}")
     print(f"  temperature={args.temperature}")
+    print(f"  trace_negatives={args.trace_negatives}")
     print(f"{'='*60}\n")
 
     for epoch in range(args.epochs):
@@ -496,6 +546,7 @@ def main():
                 projector, predictor, raw_emb_tensor, batch, id_to_idx,
                 args.neg_samp, device, args.n_predictors, args.temperature,
                 neg_pool_indices=neg_pool_indices,
+                trace_negatives=args.trace_negatives,
             )
 
             optimizer.zero_grad()
@@ -525,6 +576,7 @@ def main():
                     projector, predictor, raw_emb_tensor, batch, id_to_idx,
                     args.neg_samp // 8, device, args.n_predictors, args.temperature,
                     neg_pool_indices=neg_pool_indices,
+                    trace_negatives=args.trace_negatives,
                 )
                 val_loss_sum += loss.item()
                 val_batches += 1
