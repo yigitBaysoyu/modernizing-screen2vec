@@ -124,6 +124,16 @@ def parse_args():
              "so the checkpoints do not overwrite each other.",
     )
     parser.add_argument(
+        "--lm_model_id", type=str, default=None,
+        help=(
+            "Base LM as a full HF id, e.g. 'Qwen/Qwen2.5-Coder-3B'. Overrides "
+            "AdapterConfig.lm_model_id, so a submit script can be the single "
+            "source of truth for both the model and the slug that main() "
+            "appends to --output_dir -- the two can no longer disagree. "
+            "Default: whatever AdapterConfig sets."
+        ),
+    )
+    parser.add_argument(
         "--fast", type=str2bool, nargs="?", const=True, default=False,
         help=(
             "Enable the throughput optimisations (default: off). They are "
@@ -510,6 +520,12 @@ def main():
     args = parse_args()
     cfg = AdapterConfig()
     cfg.fast = args.fast
+
+    # An explicit --lm_model_id wins over the AdapterConfig default, and it must
+    # be applied before the slug below is derived: the submit script names the
+    # checkpoint directory from the same HF id, so the two cannot drift apart.
+    if args.lm_model_id:
+        cfg.lm_model_id = args.lm_model_id
 
     # Tag the output dir with the base LM so checkpoints trained against
     # different models never collide, e.g. "..._full" -> "..._full_qwen2.5-1.5b".

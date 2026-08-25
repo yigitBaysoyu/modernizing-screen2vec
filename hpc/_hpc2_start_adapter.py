@@ -26,9 +26,12 @@ JOBS_PER_BATCH = 10000
 # EMBEDDINGS_DIR = "embeddings_4096_last"
 EMBEDDINGS_DIR = "embeddings_4x4096_avg"
 
-## !!! MUSS AUCH IN 2_train_adapter.py::AdapterConfig EINGESTELLT WERDEN !!! ##
-MODEL_SLUG = "qwen2.5-coder-3b"
-## !!! MUSS AUCH IN 2_train_adapter.py::AdapterConfig EINGESTELLT WERDEN !!! ##
+# Base LM as a full Hugging Face id. Handed to 2_train_adapter.py via
+# --lm_model_id, which overrides AdapterConfig.lm_model_id -- so this is the only
+# place the model has to be set, and MODEL_SLUG below is guaranteed to be the
+# same slug main() appends to --output_dir.
+LM_MODEL_ID = "Qwen/Qwen2.5-Coder-3B"
+MODEL_SLUG = LM_MODEL_ID.split("/")[-1].lower()  # == model_output_slug()
 
 OUTPUT_DIR = f"adapter_model_out_{EMBEDDINGS_DIR}_full_{MODEL_SLUG}"
 
@@ -174,7 +177,7 @@ pip install -r requirements.txt
 srun python hpc/env.py
 
 # EXECUTE MAIN WORKLOAD
-srun bash 2_train_adapter_amplitude.sh --embeddings_dir {EMBEDDINGS_DIR} --output_dir {OUTPUT_DIR}
+srun bash 2_train_adapter_amplitude.sh --embeddings_dir {EMBEDDINGS_DIR} --output_dir {OUTPUT_DIR} --lm_model_id {LM_MODEL_ID} --fast true
 
 # Copy logs from the submission directory (the first folder) to this task's hpc folder
 cp $SLURM_SUBMIT_DIR/stdout_${{SLURM_ARRAY_JOB_ID}}_${{SLURM_ARRAY_TASK_ID}}.txt hpc/ 2>/dev/null || true

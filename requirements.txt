@@ -17,3 +17,4 @@ scikit-learn
 rapidfuzz
 optree>=0.13.0
 json-repair
+seaborn
