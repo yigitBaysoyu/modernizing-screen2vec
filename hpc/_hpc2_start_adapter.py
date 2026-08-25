@@ -27,7 +27,7 @@ JOBS_PER_BATCH = 10000
 EMBEDDINGS_DIR = "embeddings_8x4096_avg"
 
 ## !!! MUSS AUCH IN 2_train_adapter.py::AdapterConfig EINGESTELLT WERDEN !!! ##
-MODEL_SLUG = "qwen2.5-1.5b"
+MODEL_SLUG = "qwen2.5-coder-3b"
 ## !!! MUSS AUCH IN 2_train_adapter.py::AdapterConfig EINGESTELLT WERDEN !!! ##
 
 OUTPUT_DIR = f"adapter_model_out_{EMBEDDINGS_DIR}_full_{MODEL_SLUG}"

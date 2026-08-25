@@ -42,7 +42,17 @@ class AdapterConfig:
     # Base LM for training and evaluation. Adapter must be retrained
     # when this changes — LoRA weights are architecture-specific.
     # lm_model_id = "Qwen/Qwen3.5-2B"
-    lm_model_id = "Qwen/Qwen2.5-1.5B"  # sanity check: state of 926391f (2026-06-23)
+    # lm_model_id = "Qwen/Qwen2.5-1.5B"  # sanity check: state of 926391f (2026-06-23)
+    #
+    # Qwen2.5-Coder-3B is a plain Qwen2ForCausalLM (model_type "qwen2"), same
+    # family as Qwen2.5-1.5B above -- 100% full attention, no vision tower, no
+    # linear-attention/SSM layers like Qwen3.5 -- so it needs no adapter-code
+    # changes: lm_hidden_dim below is read from the loaded model's config
+    # (2048 here vs. 1536 for the 1.5B), and lora_target_modules matches the
+    # same module names (q/k/v/o_proj). Note: unlike the 1.5B/7B siblings,
+    # this size is released under the Qwen Research (non-commercial) license,
+    # not Apache 2.0.
+    lm_model_id = "Qwen/Qwen2.5-Coder-3B"
 
     # LoRA fine-tuning parameters updated for newer Qwen structural compliance
     lora_r = 16
