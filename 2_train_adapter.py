@@ -11,7 +11,6 @@
 
 import os
 import json
-import math
 import argparse
 import numpy as np
 import torch
@@ -58,31 +57,6 @@ class AdapterConfig:
     num_epochs = 100
     # patience = 5  # Early stopping patience
     patience = 3  # sanity check: as in 926391f
-
-    # -- Training-regime options (A3) -----------------------------------------
-    # All three default to the values that reproduce earlier sweeps exactly, so
-    # a run without the corresponding flags is unchanged.
-    #
-    # warmup_epochs: LLaVA trains the projector first and only then unfreezes
-    # the language model, because a randomly initialised projector emits noise
-    # for the first stretch and the LoRA spends that time learning to
-    # compensate for it rather than learning the task. This pipeline has always
-    # trained both from step 0. With warmup_epochs > 0 the LoRA parameter
-    # group's learning rate is held at 0 for that many epochs.
-    #
-    # It is the *learning rate* that is held at 0 rather than requires_grad
-    # being toggled: accelerator.prepare() wraps the model once, and DDP
-    # expects the set of gradient-carrying parameters to stay fixed for the
-    # lifetime of that wrapper. In AdamW the decoupled weight decay is scaled
-    # by lr as well, so lr=0 really is a no-op step and not a slow decay.
-    warmup_epochs = 0
-
-    # lr_schedule: "none" keeps the flat learning rates above. "cosine" adds a
-    # linear warmup over `lr_warmup_steps` optimizer steps followed by cosine
-    # decay to zero across the remaining planned steps -- the standard recipe
-    # for LoRA fine-tuning, and absent here entirely until now.
-    lr_schedule = "none"
-    lr_warmup_steps = 200
     # Max tokens for the target JSON string.  Targets that do not fit are
     # dropped by build_target_column() rather than truncated -- see the note
     # there on why truncating them poisons the stop behaviour.
@@ -146,45 +120,6 @@ def parse_args():
             "arithmetically equivalent to the default path -- they only remove "
             "redundant work -- but the default stays bit-for-bit the old code "
             "so a sweep can be reproduced exactly. See FAST_PATH_NOTES."
-        ),
-    )
-    parser.add_argument(
-        "--warmup_epochs", type=int, default=None,
-        help=(
-            "Train the projector alone for this many epochs before the LoRA "
-            "starts learning (default: 0, i.e. the joint-from-step-0 behaviour "
-            "of earlier sweeps). This is the two-stage LLaVA recipe: a "
-            "randomly initialised projector emits noise at first, and without "
-            "a warmup the LoRA learns to compensate for that noise instead of "
-            "learning the task."
-        ),
-    )
-    parser.add_argument(
-        "--lr_schedule", type=str, default=None, choices=("none", "cosine"),
-        help=(
-            "Learning-rate schedule (default: none, the flat rates earlier "
-            "sweeps used). 'cosine' is linear warmup over --lr_warmup_steps "
-            "optimizer steps, then cosine decay to zero."
-        ),
-    )
-    parser.add_argument(
-        "--lr_warmup_steps", type=int, default=None,
-        help="Warmup length in optimizer steps for --lr_schedule cosine.",
-    )
-    parser.add_argument(
-        "--lr_projector", type=float, default=None,
-        help="Override AdapterConfig.lr_projector.",
-    )
-    parser.add_argument(
-        "--lr_lora", type=float, default=None,
-        help="Override AdapterConfig.lr_lora.",
-    )
-    parser.add_argument(
-        "--patience", type=int, default=None,
-        help=(
-            "Early-stopping patience (default: 3). The runs measured so far "
-            "underfit -- train and validation track each other to within a few "
-            "percent -- so stopping this early leaves quality on the table."
         ),
     )
     return parser.parse_args()
@@ -566,16 +501,6 @@ def main():
     cfg = AdapterConfig()
     cfg.fast = args.fast
 
-    # CLI overrides, applied only when given so AdapterConfig stays the single
-    # place the defaults are written down.
-    for name in (
-        "warmup_epochs", "lr_schedule", "lr_warmup_steps",
-        "lr_projector", "lr_lora", "patience",
-    ):
-        value = getattr(args, name, None)
-        if value is not None:
-            setattr(cfg, name, value)
-
     # Tag the output dir with the base LM so checkpoints trained against
     # different models never collide, e.g. "..._full" -> "..._full_qwen2.5-1.5b".
     model_slug = model_output_slug(cfg.lm_model_id)
@@ -743,63 +668,8 @@ def main():
         },
     ])
 
-    # The LoRA group is index 1; remember its configured rate so the warmup
-    # can put it back after holding it at 0.
-    lora_group_index = 1
-    target_lr_lora = cfg.lr_lora
-
     # Prepare model, projector, and optimizer with accelerator
     lm_model, projector, optimizer = accelerator.prepare(lm_model, projector, optimizer)
-
-    # -------------------------------------------------------------------------
-    # 6b. Learning-rate schedule (A3)
-    # -------------------------------------------------------------------------
-    # Stepped once per optimizer step, so it has to know how many of those an
-    # epoch has: one per grad_accum_steps samples, plus the trailing flush.
-    steps_per_epoch = max(
-        1, math.ceil(len(train_embeddings) / cfg.grad_accum_steps)
-    )
-    total_planned_steps = max(1, steps_per_epoch * cfg.num_epochs)
-    lr_scheduler = None
-    if getattr(cfg, "lr_schedule", "none") == "cosine":
-        warmup_steps = min(cfg.lr_warmup_steps, max(1, total_planned_steps - 1))
-        # The projector-only stage expressed in optimizer steps, so the LoRA
-        # group's own multiplier can encode it. Doing it here rather than by
-        # assigning to param_groups per epoch matters: LambdaLR recomputes
-        # every group's lr from its initial_lr on each step() and would
-        # overwrite an externally assigned 0 on the very next step.
-        stage_one_steps = getattr(cfg, "warmup_epochs", 0) * steps_per_epoch
-
-        def shape(step):
-            if step < warmup_steps:
-                return (step + 1) / warmup_steps
-            progress = (step - warmup_steps) / max(
-                1, total_planned_steps - warmup_steps
-            )
-            return 0.5 * (1.0 + math.cos(math.pi * min(1.0, progress)))
-
-        def projector_lambda(step):
-            return shape(step)
-
-        def lora_lambda(step):
-            if step < stage_one_steps:
-                return 0.0
-            return shape(step)
-
-        lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
-            optimizer, [projector_lambda, lora_lambda]
-        )
-        if accelerator.is_local_main_process:
-            print(
-                f"LR schedule: cosine, {warmup_steps} warmup steps of "
-                f"{total_planned_steps} planned "
-                f"({steps_per_epoch} per epoch)"
-            )
-            if stage_one_steps:
-                print(
-                    f"    LoRA held at lr 0 for the first {stage_one_steps} "
-                    f"steps (projector-only stage)."
-                )
 
     # -------------------------------------------------------------------------
     # 7. Training loop
@@ -817,28 +687,6 @@ def main():
     for epoch in range(cfg.num_epochs):
         lm_model.train()
         projector.train()
-
-        # Two-stage training (A3): hold the LoRA group at lr 0 while the
-        # projector finds its footing, then hand it its configured rate. With
-        # warmup_epochs = 0 the else-branch runs on the very first epoch and
-        # nothing about the old behaviour changes.
-        # With a scheduler active the stage is encoded in the LoRA group's
-        # lambda instead -- see lora_lambda above -- because LambdaLR would
-        # overwrite anything assigned here on its next step().
-        warmup_epochs = 0 if lr_scheduler is not None else getattr(cfg, "warmup_epochs", 0)
-        if warmup_epochs and epoch < warmup_epochs:
-            optimizer.param_groups[lora_group_index]["lr"] = 0.0
-            if accelerator.is_local_main_process and epoch == 0:
-                print(
-                    f"    [*] Projector-only warmup for {warmup_epochs} "
-                    f"epoch(s); LoRA lr held at 0."
-                )
-        elif warmup_epochs and epoch == warmup_epochs:
-            optimizer.param_groups[lora_group_index]["lr"] = target_lr_lora
-            if accelerator.is_local_main_process:
-                print(
-                    f"    [*] Warmup over: LoRA lr set to {target_lr_lora}."
-                )
 
         epoch_loss = 0.0
         # See FAST_PATH_NOTES (2): the running loss lives on the GPU so the
@@ -933,8 +781,6 @@ def main():
                         max_norm=1.0,
                     )
                 optimizer.step()
-                if lr_scheduler is not None:
-                    lr_scheduler.step()
                 optimizer.zero_grad()
 
         # Flush remaining accumulated gradients
@@ -946,8 +792,6 @@ def main():
                     max_norm=1.0,
                 )
             optimizer.step()
-            if lr_scheduler is not None:
-                lr_scheduler.step()
             optimizer.zero_grad()
 
         if cfg.fast:
