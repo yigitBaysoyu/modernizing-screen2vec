@@ -24,7 +24,7 @@ JOBS_PER_BATCH = 10000
 # AdapterConfig of that commit (Qwen2.5-1.5B, float32, attention-only LoRA,
 # patience 3, projector without positional table).
 # EMBEDDINGS_DIR = "embeddings_4096_last"
-EMBEDDINGS_DIR = "embeddings_8x4096_avg"
+EMBEDDINGS_DIR = "embeddings_4x4096_avg"
 
 ## !!! MUSS AUCH IN 2_train_adapter.py::AdapterConfig EINGESTELLT WERDEN !!! ##
 MODEL_SLUG = "qwen2.5-coder-3b"
