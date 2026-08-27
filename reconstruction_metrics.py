@@ -14,6 +14,7 @@ loading a model stack it has no use for.
 
 import difflib
 import json
+from collections import Counter, defaultdict
 
 # Optional: only needed for the repair scoring pass.  Kept soft so an
 # environment without it still runs the strict evaluation unchanged.
@@ -185,6 +186,10 @@ def score_against_ground_truth(pred_data, gt_data, pred_str, gt_str):
 
     metrics["levenshtein_distance"] = lev_dist
     metrics["levenshtein_similarity"] = lev_sim
+
+    # The order-free metrics handle None / non-dict input themselves, so they
+    # are computed once here rather than at each of the three returns below.
+    metrics.update(unordered_metrics(pred_data, gt_data))
 
     # isinstance rather than a plain truth test: a prediction that parses as a
     # list or a scalar reaches .get() below and raises.  That was reachable in
@@ -373,3 +378,219 @@ def collapse_component_loops(screen):
     if isinstance(collapsed.get("components"), list):
         collapsed["components"] = dedupe(collapsed["components"])
     return collapsed
+
+
+# =============================================================================
+# Order-free component metrics
+# =============================================================================
+#
+# class_accuracy and avg_iou above pair components by their position in the
+# flattened DFS order.  That pairing is fragile in a way that has nothing to do
+# with how good a reconstruction is:
+#
+#   * two siblings emitted in the other order score 0 twice, although the
+#     screen they describe is identical -- position lives in "bounds", not in
+#     the order of the list;
+#   * one component too many or too few near the top shifts *every* following
+#     pair by one.  At a median of 21 components per screen a single early slip
+#     can cost the remaining twenty matches;
+#   * the denominator is min(len_pred, len_gt), so components the model
+#     invented or dropped are free.  A prediction holding one lucky component
+#     scores 1.0 against a ground truth holding fifty.
+#
+# The metrics below drop the positional pairing.  Measured over 200 screens of
+# 4x4096_avg / qwen3-1.7b-base, the unordered class score is roughly twice the
+# positional one (median 0.48 vs 0.25) and 69% of screens improve -- that gap
+# is the mismeasurement, not a change in the model.
+#
+# All of them are per-screen scores; aggregation across screens stays where it
+# already is, in the notebook.
+
+# Every pair of predicted and ground-truth component sharing a class name is a
+# candidate match in _greedy_matched_iou().  A runaway generation that emits
+# thousands of copies of one class would make that quadratic blow-up the most
+# expensive thing in the whole rescore pass, so the candidate list per class is
+# capped.  Only min(n_pred, n_gt) pairs can ever be taken, so dropping the tail
+# of a pathological class costs at most a slightly worse greedy match, on input
+# that is degenerate to begin with.
+_MATCH_PAIR_BUDGET = 250_000
+
+
+def _class_of(component):
+    """The class name of a component, or None if it has no usable one.
+
+    clean_screen() omits "class" entirely when the raw Rico node carried none,
+    so a missing class is a real possibility on the ground-truth side too.
+    Returning None for both -- rather than a shared sentinel -- keeps two
+    class-less components from counting as a match.
+    """
+    if not isinstance(component, dict):
+        return None
+    cls = component.get("class")
+    return cls if isinstance(cls, str) and cls else None
+
+
+def _walk_components(screen):
+    """Yield (depth, component) for every node of a screen, root level = 0.
+
+    Mirrors flatten_components(): non-dict entries are yielded (they are
+    positions the prediction got wrong and belong in the denominator) but not
+    descended into, so the node counts here match component_count_pred/gt.
+    """
+    def walk(components, depth):
+        if not isinstance(components, list):
+            return
+        for comp in components:
+            yield depth, comp
+            if isinstance(comp, dict):
+                yield from walk(comp.get("children"), depth + 1)
+
+    if not isinstance(screen, dict):
+        return iter(())
+    return walk(screen.get("components"), 0)
+
+
+def _prf(intersection, n_pred, n_gt):
+    """Recall / precision / F1 from one intersection size and two totals."""
+    recall = intersection / n_gt if n_gt else 0.0
+    precision = intersection / n_pred if n_pred else 0.0
+    f1 = (
+        2 * precision * recall / (precision + recall)
+        if precision + recall
+        else 0.0
+    )
+    return recall, precision, f1
+
+
+def _greedy_matched_iou(pred_by_class, gt_by_class):
+    """Summed IoU of a greedy best-first matching, restricted to equal classes.
+
+    Candidate pairs are ranked by IoU and taken best-first while neither side
+    is already spoken for.  Matching only within a class makes this a joint
+    class-and-position score: a box in exactly the right place but under the
+    wrong class name contributes nothing, which is the intended reading -- the
+    reconstruction has to get both right.
+
+    Pairs that do not overlap at all are dropped before sorting; they would add
+    0.0 anyway, and skipping them keeps the candidate list small.
+    """
+    total = 0.0
+
+    for cls, gt_boxes in gt_by_class.items():
+        pred_boxes = pred_by_class.get(cls)
+        if not pred_boxes or not gt_boxes:
+            continue
+
+        budget = max(1, _MATCH_PAIR_BUDGET // len(gt_boxes))
+        pred_boxes = pred_boxes[:budget]
+
+        pairs = []
+        for gi, gb in enumerate(gt_boxes):
+            for pi, pb in enumerate(pred_boxes):
+                iou = calculate_iou(gb, pb)
+                if iou > 0.0:
+                    pairs.append((iou, gi, pi))
+
+        # Ties broken by index so the result does not depend on sort stability
+        # across Python versions.
+        pairs.sort(key=lambda pair: (-pair[0], pair[1], pair[2]))
+
+        used_gt, used_pred = set(), set()
+        for iou, gi, pi in pairs:
+            if gi in used_gt or pi in used_pred:
+                continue
+            used_gt.add(gi)
+            used_pred.add(pi)
+            total += iou
+
+    return total
+
+
+def unordered_metrics(pred_data, gt_data):
+    """
+    Every order-free metric for one screen, from a single walk of both trees.
+
+    Returns:
+        class_unordered_recall / _precision / _f1
+            Class multiset overlap over the whole flattened tree.  Order and
+            nesting are ignored entirely; only how many components of each
+            class the prediction got right counts.  Recall is measured against
+            the ground truth, precision against the prediction -- reporting
+            recall alone would reward a model that simply emits one of every
+            class it knows.
+
+        class_level_recall / _precision / _f1
+            The same overlap, but with one multiset per tree depth.  Order
+            within a level is still free, the depth has to be right.  This
+            checks the depth, not the parent: a Button at the correct depth
+            under the wrong container counts as a match.
+
+        matched_iou
+            Order-free counterpart to avg_iou: greedy best-first matching of
+            same-class components by IoU (see _greedy_matched_iou), divided by
+            max(n_pred, n_gt).  The max -- rather than avg_iou's min -- means
+            invented and dropped components both cost score instead of being
+            free.
+
+    `pred_data` is None when the prediction did not parse; everything is 0.0
+    then, matching how the strict path treats an unparseable prediction.
+    """
+    pred_nodes = list(_walk_components(pred_data))
+    gt_nodes = list(_walk_components(gt_data))
+    n_pred, n_gt = len(pred_nodes), len(gt_nodes)
+
+    pred_bag, gt_bag = Counter(), Counter()
+    pred_levels = defaultdict(Counter)
+    gt_levels = defaultdict(Counter)
+    pred_by_class = defaultdict(list)
+    gt_by_class = defaultdict(list)
+
+    for nodes, bag, levels, by_class in (
+        (pred_nodes, pred_bag, pred_levels, pred_by_class),
+        (gt_nodes, gt_bag, gt_levels, gt_by_class),
+    ):
+        for depth, node in nodes:
+            cls = _class_of(node)
+            if cls is None:
+                continue
+            bag[cls] += 1
+            levels[depth][cls] += 1
+            box = _numeric_box(node.get("bounds"))
+            if box is not None:
+                by_class[cls].append(box)
+
+    flat_hits = sum((pred_bag & gt_bag).values())
+    level_hits = sum(
+        sum((pred_levels.get(depth, Counter()) & counts).values())
+        for depth, counts in gt_levels.items()
+    )
+
+    recall, precision, f1 = _prf(flat_hits, n_pred, n_gt)
+    level_recall, level_precision, level_f1 = _prf(level_hits, n_pred, n_gt)
+
+    denominator = max(n_pred, n_gt)
+    iou_total = _greedy_matched_iou(pred_by_class, gt_by_class)
+
+    return {
+        "class_unordered_recall": recall,
+        "class_unordered_precision": precision,
+        "class_unordered_f1": f1,
+        "class_level_recall": level_recall,
+        "class_level_precision": level_precision,
+        "class_level_f1": level_f1,
+        "matched_iou": iou_total / denominator if denominator else 0.0,
+    }
+
+
+# Every key unordered_metrics() produces, in report order.  repair_rescore.py
+# and the result notebook iterate this rather than repeating the list, so a
+# metric added above shows up in both without a second edit.
+UNORDERED_METRIC_KEYS = (
+    "class_unordered_recall",
+    "class_unordered_precision",
+    "class_unordered_f1",
+    "class_level_recall",
+    "class_level_precision",
+    "class_level_f1",
+    "matched_iou",
+)

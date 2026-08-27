@@ -312,13 +312,14 @@ def eval_single_trace(
 
     T = len(trace)
     if T < 2:
-        return T, 0.0, 0, 0, 0, 0, 0
+        return T, 0.0, 0, 0, 0, 0, 0, 0.0
 
     # Permissive: evaluate predictions for screens i = 1 to T-1.
     # Strict: only full windows, i.e. i = n_predictors to T-1.
     first_target = n_predictors if strict else 1
 
     sq_err_sum = 0.0
+    sum_rr = 0.0
     n_instances = 0
     hits_top1 = 0
     hits_top001pct = 0
@@ -381,7 +382,14 @@ def eval_single_trace(
         if rank <= k_1pct: hits_top1pct += 1
         if rank <= k_5pct: hits_top5pct += 1
 
-    return n_instances, sq_err_sum, hits_top1, hits_top001pct, hits_top01pct, hits_top1pct, hits_top5pct
+        # Reciprocal rank. `rank` is the *pessimistic* rank under ties -- every
+        # candidate at least as similar as the target counts -- which is the
+        # same convention the top-k% hits above already use, so MRR does not
+        # quietly grade on a different curve than the columns beside it.
+        sum_rr += 1.0 / rank
+
+    return (n_instances, sq_err_sum, hits_top1, hits_top001pct,
+            hits_top01pct, hits_top1pct, hits_top5pct, sum_rr)
 
 
 def evaluate_screen_prediction(
@@ -464,11 +472,13 @@ def evaluate_screen_prediction(
     hits_top1pct = 0
     hits_top5pct = 0
     sum_sq_error = 0.0
+    sum_reciprocal_rank = 0.0
 
     for res in results:
-        T, sq_err_sum, h1, h001, h01, h1pct, h5pct = res
+        T, sq_err_sum, h1, h001, h01, h1pct, h5pct, rr = res
         total_predictions += T
         sum_sq_error += sq_err_sum
+        sum_reciprocal_rank += rr
         hits_top1 += h1
         hits_top001pct += h001
         hits_top01pct += h01
@@ -479,6 +489,7 @@ def evaluate_screen_prediction(
     raw = {
         "total_predictions": int(total_predictions),
         "sum_sq_error": float(sum_sq_error),
+        "sum_reciprocal_rank": float(sum_reciprocal_rank),
         "hits_top1": int(hits_top1),
         "hits_top001pct": int(hits_top001pct),
         "hits_top01pct": int(hits_top01pct),
@@ -498,6 +509,16 @@ def evaluate_screen_prediction(
         "top1pct": hits_top1pct / total_predictions,
         "top5pct": hits_top5pct / total_predictions,
         "nrmse": math.sqrt(sum_sq_error / total_predictions) / mean_norm,
+        # Mean Reciprocal Rank. Not part of the paper's Table 3 -- it is
+        # reported alongside, never inside, the comparison table. It needs no
+        # top-k% threshold, so unlike the Top-0.01%..5% columns it is not
+        # sensitive to where those cut-offs happen to fall, while still being
+        # dominated by the head of the ranking (1/rank decays fast). Read it
+        # with the same caveat as Top-1: on an embeddings_*_with_app_desc run
+        # the concatenated app half makes near-ranks mostly app identity, so
+        # the *_wo_app variants are where this number says something about the
+        # screen model.
+        "mrr": float(sum_reciprocal_rank / total_predictions),
     }
 
     print(f"\n  Total prediction instances: {total_predictions}")
@@ -540,6 +561,7 @@ def aggregate_results(results_dir: str, label: str = None, lstm_mode: bool = Fal
     # Read and sum accumulators
     total_predictions = 0
     sum_sq_error = 0.0
+    sum_reciprocal_rank = 0.0
     hits_top1 = 0
     hits_top001pct = 0
     hits_top01pct = 0
@@ -551,6 +573,7 @@ def aggregate_results(results_dir: str, label: str = None, lstm_mode: bool = Fal
     num_batches_expected = None
     strict = False
     protocol_mismatch = False
+    partials_without_rr = 0
 
     for pf in partial_files:
         with open(pf, "r") as f:
@@ -561,6 +584,13 @@ def aggregate_results(results_dir: str, label: str = None, lstm_mode: bool = Fal
               f"{p['total_predictions']} predictions")
         total_predictions += p["total_predictions"]
         sum_sq_error += p["sum_sq_error"]
+        # Partial files written before MRR existed carry no such key. Treating
+        # a missing one as 0.0 would silently report a too-low MRR over a mixed
+        # set of shards, so the gap is tracked and the number suppressed below.
+        if "sum_reciprocal_rank" in p:
+            sum_reciprocal_rank += p["sum_reciprocal_rank"]
+        else:
+            partials_without_rr += 1
         hits_top1 += p["hits_top1"]
         hits_top001pct += p["hits_top001pct"]
         hits_top01pct += p["hits_top01pct"]
@@ -593,6 +623,12 @@ def aggregate_results(results_dir: str, label: str = None, lstm_mode: bool = Fal
     if total_predictions == 0:
         raise ValueError("Total predictions is 0 — no data to aggregate.")
 
+    if partials_without_rr:
+        print(f"  WARNING: {partials_without_rr} of {len(partial_files)} partial "
+              "files predate the MRR accumulator. The aggregated MRR would be "
+              "computed over a subset of the predictions, so it is reported as "
+              "nan. Re-run those workers to get it.")
+
     # Compute final metrics
     metrics = {
         "top1": hits_top1 / total_predictions,
@@ -601,6 +637,17 @@ def aggregate_results(results_dir: str, label: str = None, lstm_mode: bool = Fal
         "top1pct": hits_top1pct / total_predictions,
         "top5pct": hits_top5pct / total_predictions,
         "nrmse": math.sqrt(sum_sq_error / total_predictions) / mean_norm,
+        # Mean Reciprocal Rank. Not part of the paper's Table 3 -- it is
+        # reported alongside, never inside, the comparison table. It needs no
+        # top-k% threshold, so unlike the Top-0.01%..5% columns it is not
+        # sensitive to where those cut-offs happen to fall, while still being
+        # dominated by the head of the ranking (1/rank decays fast). Read it
+        # with the same caveat as Top-1: on an embeddings_*_with_app_desc run
+        # the concatenated app half makes near-ranks mostly app identity, so
+        # the *_wo_app variants are where this number says something about the
+        # screen model.
+        "mrr": (float("nan") if partials_without_rr
+                else float(sum_reciprocal_rank / total_predictions)),
     }
 
     # Set label
@@ -679,6 +726,10 @@ def print_comparison_table(our_metrics: dict):
         )
 
     print(f"{'=' * len(header)}\n")
+
+    # MRR has no counterpart in Table 3, so it is printed beside the table
+    # rather than as a column full of "n/a" for every paper row.
+    print(f"  Supplementary (not in Table 3): MRR {our_metrics['mrr']:.4f}")
 
     # Print delta vs. best paper result (Screen2Vec-EUCLIDEAN-spatial)
     best = PAPER_TABLE3["Screen2Vec-EUCLIDEAN-spatial"]

@@ -19,10 +19,12 @@ import json
 import os
 
 from reconstruction_metrics import (
+    UNORDERED_METRIC_KEYS,
     collapse_component_loops,
     flatten_components,
     repair_json,
     score_against_ground_truth,
+    unordered_metrics,
 )
 
 # Set once per worker process by init_worker(); see rescore_item().
@@ -126,6 +128,12 @@ def rescore_item(task):
             pred_data = repair_json(pred_str)
             repair_used = pred_data is not None
 
+        # The strict parse, before any repair or loop collapsing.  Every other
+        # strict column is read out of the reports on disk, but the order-free
+        # metrics were added after those were written, so there is nothing to
+        # parse -- their strict value has to be produced here as well.
+        strict_data = pred_data if not repair_used else None
+
         removed = 0
         if COLLAPSE_LOOPS and isinstance(pred_data, dict):
             before = len(flatten_components(pred_data))
@@ -147,6 +155,16 @@ def rescore_item(task):
         # Named after the report label ("Average Bounds IoU"), not after the
         # metrics key, so the repaired column sits next to its strict twin.
         row["average_bounds_iou_repaired"] = metrics["avg_iou"]
+
+        # Order-free metrics, both halves.  The repaired values already come
+        # out of score_against_ground_truth() above -- it computes them for
+        # whatever parse it was handed -- so only the strict half needs a
+        # second pass, over the unrepaired, uncollapsed parse.
+        strict_unordered = unordered_metrics(strict_data, gt_data)
+        for key in UNORDERED_METRIC_KEYS:
+            row[key] = strict_unordered[key]
+            row[f"{key}_repaired"] = metrics[key]
+
         rows.append(row)
 
     return rows

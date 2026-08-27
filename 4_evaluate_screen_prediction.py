@@ -331,13 +331,14 @@ def eval_single_trace(
 
     T = len(trace)
     if T < 2:
-        return T, 0.0, 0, 0, 0, 0, 0
+        return T, 0.0, 0, 0, 0, 0, 0, 0.0
 
     # Permissive: evaluate predictions for screens i = 1 to T-1.
     # Full windows (--strict / --nback): only i = n_predictors to T-1.
     first_target = n_predictors if full_windows else 1
 
     sq_err_sum = 0.0
+    sum_rr = 0.0
     n_instances = 0
     hits_top1 = 0
     hits_top001pct = 0
@@ -400,7 +401,14 @@ def eval_single_trace(
         if rank <= k_1pct: hits_top1pct += 1
         if rank <= k_5pct: hits_top5pct += 1
 
-    return n_instances, sq_err_sum, hits_top1, hits_top001pct, hits_top01pct, hits_top1pct, hits_top5pct
+        # Reciprocal rank. `rank` is the *pessimistic* rank under ties -- every
+        # candidate at least as similar as the target counts -- which is the
+        # same convention the top-k% hits above already use, so MRR does not
+        # quietly grade on a different curve than the columns beside it.
+        sum_rr += 1.0 / rank
+
+    return (n_instances, sq_err_sum, hits_top1, hits_top001pct,
+            hits_top01pct, hits_top1pct, hits_top5pct, sum_rr)
 
 
 def evaluate_screen_prediction(
@@ -491,11 +499,13 @@ def evaluate_screen_prediction(
     hits_top1pct = 0
     hits_top5pct = 0
     sum_sq_error = 0.0
+    sum_reciprocal_rank = 0.0
 
     for res in results:
-        T, sq_err_sum, h1, h001, h01, h1pct, h5pct = res
+        T, sq_err_sum, h1, h001, h01, h1pct, h5pct, rr = res
         total_predictions += T
         sum_sq_error += sq_err_sum
+        sum_reciprocal_rank += rr
         hits_top1 += h1
         hits_top001pct += h001
         hits_top01pct += h01
@@ -510,6 +520,24 @@ def evaluate_screen_prediction(
         "top1pct": hits_top1pct / total_predictions,
         "top5pct": hits_top5pct / total_predictions,
         "nrmse": math.sqrt(sum_sq_error / total_predictions) / mean_norm,
+        # Mean Reciprocal Rank. Not part of the paper's Table 3 -- it is
+        # reported alongside, never inside, the comparison table. It needs no
+        # top-k% threshold, so unlike the Top-0.01%..5% columns it is not
+        # sensitive to where those cut-offs happen to fall, while still being
+        # dominated by the head of the ranking (1/rank decays fast). Read it
+        # with the same caveat as Top-1: on an embeddings_*_with_app_desc run
+        # the concatenated app half makes near-ranks mostly app identity, so
+        # the *_wo_app variants are where this number says something about the
+        # screen model.
+        "mrr": float(sum_reciprocal_rank / total_predictions),
+        # Population actually evaluated under this protocol, carried into
+        # the metrics dict so print_comparison_table() can report it as the
+        # last line of the run. --strict and --nback drop traces shorter
+        # than n_predictors + 1, so this is smaller than the permissive
+        # default and shrinks further as K grows.
+        "n_traces": len(traces),
+        "n_screens_in_traces": sum(len(t) for t in traces),
+        "n_instances": total_predictions,
     }
 
     print(f"\n  Total prediction instances: {total_predictions}")
@@ -555,6 +583,10 @@ def print_comparison_table(our_metrics: dict):
 
     print(f"{'=' * len(header)}\n")
 
+    # MRR has no counterpart in Table 3, so it is printed beside the table
+    # rather than as a column full of "n/a" for every paper row.
+    print(f"  Supplementary (not in Table 3): MRR {our_metrics['mrr']:.4f}")
+
     # Print delta vs. best paper result (Screen2Vec-EUCLIDEAN-spatial)
     best = PAPER_TABLE3["Screen2Vec-EUCLIDEAN-spatial"]
     print("  Delta vs. Screen2Vec-EUCLIDEAN-spatial (best paper model):")
@@ -572,6 +604,14 @@ def print_comparison_table(our_metrics: dict):
     sign = "+" if rmse_delta >= 0 else ""
     status = "BETTER" if rmse_delta < 0 else ("SAME" if rmse_delta == 0 else "WORSE")
     print(f"    {'Norm.RMSE':<12}: {sign}{rmse_delta:.4f}  ({status})")
+
+    # Printed last so the notebooks show the evaluated trace population at
+    # the very bottom of their output, next to the numbers it produced.
+    if "n_traces" in our_metrics:
+        print()
+        print(f"  Eligible traces evaluated: {our_metrics['n_traces']} "
+              f"({our_metrics['n_screens_in_traces']} screens, "
+              f"{our_metrics['n_instances']} prediction instances)")
 
 
 # ============================================================================
