@@ -15,7 +15,6 @@
 # Both of those keep working unchanged and can still be used on their own.
 
 import json
-import os
 import platform
 import re
 import subprocess
@@ -35,7 +34,7 @@ from pathlib import Path
 #     two can therefore no longer disagree -- which is what used to silently
 #     produce "..._full_<slug-from-here>_<slug-from-AdapterConfig>" directories
 #     that neither the mail step nor the reconstruction could find.
-LM_MODEL_ID = "Qwen/Qwen2.5-Coder-3B"
+LM_MODEL_ID = "Qwen/Qwen3-1.7B-Base"
 
 # (b) Which embeddings to train the adapter on and to reconstruct from.
 #     Either "4x4096_avg" or the full "embeddings_4x4096_avg" -- both work.
@@ -45,7 +44,7 @@ LM_MODEL_ID = "Qwen/Qwen2.5-Coder-3B"
 #     The directory name is the *only* place this has to be set: load_embeddings()
 #     reads whatever shape is in the .npz files, and the projector maps an
 #     (N, 4096) embedding to N prefix tokens for any N <= num_prefix_tokens (128).
-EMBEDDINGS = "4x4096_avg"
+EMBEDDINGS = "4096_last"
 
 # ==============================================================================
 
