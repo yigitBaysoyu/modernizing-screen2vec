@@ -115,6 +115,16 @@ eight concurrent H200s. Each task uses batch size 64, recursively splits a batch
 on CUDA OOM, and skips IDs that already have a successful reconstruction/report
 pair. A dependent CPU job audits all five folders for 66,261 complete pairs.
 
+To recover only the separate Qwen3-1.7B-Base `4096_last` run (for example while
+the 4B recovery is still active), select it explicitly:
+
+```bash
+python hpc/_hpc6_resume_qwen3_4b_reconstructions.py \
+  --only qwen3-1.7b-base --dry-run
+python hpc/_hpc6_resume_qwen3_4b_reconstructions.py \
+  --only qwen3-1.7b-base
+```
+
 Important Notes:
 - The original screen2vec paper is stored in the file "screen2vec.txt". Please read it.
 - The original source code is stored in folder "screen2vec-master".

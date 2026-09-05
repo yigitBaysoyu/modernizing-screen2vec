@@ -1,8 +1,8 @@
-"""Resume the five incomplete Qwen3-4B-Base reconstruction runs on HPC.
+"""Resume selected incomplete Qwen3-Base reconstruction runs on HPC.
 
 Run this on the login node from the checked-out project. It submits one Slurm
-array with 40 logical tasks (five embedding variants x eight shards), capped at
-eight concurrent one-H200 tasks. Existing successful output pairs are skipped.
+array with eight shards per selected run, capped at eight concurrent one-H200
+tasks. Existing successful output pairs are skipped.
 """
 
 import argparse
@@ -29,23 +29,27 @@ EVAL_WORKERS = 6
 RECON_TIME = "2-00:00:00"
 MAIL_TO = "jonathan.liebers@uni-due.de"
 
-VARIANTS = (
-    "4x4096_avg",
-    "16x4096_avg",
-    "64x4096_avg",
-    "4096_avg",
-    "4096_last",
+RUN_SPECS = (
+    ("qwen3-4b-base", "4x4096_avg"),
+    ("qwen3-4b-base", "16x4096_avg"),
+    ("qwen3-4b-base", "64x4096_avg"),
+    ("qwen3-4b-base", "4096_avg"),
+    ("qwen3-4b-base", "4096_last"),
+    ("qwen3-1.7b-base", "4096_last"),
 )
+MODEL_SLUGS = tuple(dict.fromkeys(model_slug for model_slug, _ in RUN_SPECS))
 
 
-def run_paths(variant):
-    adapter_name = f"adapter_model_out_embeddings_{variant}_full_qwen3-4b-base"
+def run_paths(model_slug, variant):
+    adapter_name = f"adapter_model_out_embeddings_{variant}_full_{model_slug}"
     reconstruction_name = (
         f"reconstructions_{variant}__via__"
-        f"embeddings_{variant}_full_qwen3-4b-base"
+        f"embeddings_{variant}_full_{model_slug}"
     )
     return {
+        "model_slug": model_slug,
         "variant": variant,
+        "label": f"{model_slug}/{variant}",
         "adapter_name": adapter_name,
         "adapter_dir": SCRATCH_ROOT / adapter_name,
         "embeddings_dir": SCRATCH_ROOT / f"embeddings_{variant}",
@@ -53,7 +57,7 @@ def run_paths(variant):
     }
 
 
-RUNS = tuple(run_paths(variant) for variant in VARIANTS)
+RUNS = tuple(run_paths(model_slug, variant) for model_slug, variant in RUN_SPECS)
 
 
 def old_fingerprint(run):
@@ -104,7 +108,7 @@ def count_complete_pairs(output_dir):
     return len((reconstructed & reports) - errors), len(errors)
 
 
-def preflight():
+def preflight(runs):
     problems = []
     manifests = []
     reference_embedding_ids = None
@@ -116,8 +120,9 @@ def preflight():
         problems.append(f"RICO layouts missing: {DATA_DIR}")
 
     print("Preflight:")
-    for run in RUNS:
+    for run in runs:
         variant = run["variant"]
+        label = run["label"]
         projector = run["adapter_dir"] / "best_projector.pth"
         lora_config = run["adapter_dir"] / "best_lora_adapter" / "adapter_config.json"
         manifest_path = run["output_dir"] / "_run_manifest.json"
@@ -138,17 +143,17 @@ def preflight():
                     problems.append(f"non-numeric embedding filename: {path}")
             if len(embedding_ids) != EXPECTED_COUNT:
                 problems.append(
-                    f"{variant}: expected {EXPECTED_COUNT} unique numeric embedding "
+                    f"{label}: expected {EXPECTED_COUNT} unique numeric embedding "
                     f"IDs, found {len(embedding_ids)}"
                 )
             if reference_embedding_ids is None:
                 reference_embedding_ids = embedding_ids
-                reference_variant = variant
+                reference_variant = label
             elif embedding_ids != reference_embedding_ids:
                 missing = len(reference_embedding_ids - embedding_ids)
                 extra = len(embedding_ids - reference_embedding_ids)
                 problems.append(
-                    f"{variant}: embedding ID set differs from {reference_variant} "
+                    f"{label}: embedding ID set differs from {reference_variant} "
                     f"({missing} missing, {extra} extra)"
                 )
 
@@ -166,7 +171,7 @@ def preflight():
                     or fingerprint_matches(record, canonical)
                 ):
                     problems.append(
-                        f"{variant}: manifest does not match either the original "
+                        f"{label}: manifest does not match either the original "
                         "or canonical recovery configuration"
                     )
                 manifests.append((manifest_path, record, old, canonical))
@@ -176,7 +181,7 @@ def preflight():
             if run["output_dir"].is_dir() else (0, 0)
         )
         print(
-            f"  {variant:<16} embeddings={len(embedding_ids):>5}  "
+            f"  {label:<36} embeddings={len(embedding_ids):>5}  "
             f"ids={min(embedding_ids, default=0)}..{max(embedding_ids, default=0)}  "
             f"complete={complete:>5}  pending={EXPECTED_COUNT - complete:>5}  "
             f"error_reports={errors}"
@@ -227,9 +232,10 @@ def build_job(run):
 
 def write_array_script(path, control_dir, job_paths):
     job_lines = "\n".join(f'  "{job_path}"' for job_path in job_paths)
-    total_tasks = len(RUNS) * NUM_SHARDS
+    num_runs = len(job_paths)
+    total_tasks = num_runs * NUM_SHARDS
     content = f"""#!/bin/bash
-#SBATCH -J s2v_qwen3_4b_recovery
+#SBATCH -J s2v_qwen3_recovery
 #SBATCH --output={control_dir}/output_%A_%a.txt
 #SBATCH --error={control_dir}/output_%A_%a.txt
 #SBATCH --mail-type=FAIL
@@ -251,8 +257,8 @@ job_files=(
 )
 
 task_id=${{SLURM_ARRAY_TASK_ID}}
-run_index=$((task_id % {len(RUNS)}))
-shard_index=$((task_id / {len(RUNS)}))
+run_index=$((task_id % {num_runs}))
+shard_index=$((task_id / {num_runs}))
 job_json=${{job_files[$run_index]}}
 
 echo "Recovery task $task_id: run $run_index, shard $shard_index/{NUM_SHARDS}"
@@ -270,7 +276,7 @@ srun python "{RECONSTRUCTION_SCRIPT}" \\
 def write_audit_script(path, control_dir, array_job_id, job_paths):
     job_lines = "\n".join(f'  "{job_path}"' for job_path in job_paths)
     content = f"""#!/bin/bash
-#SBATCH -J s2v_qwen3_4b_audit
+#SBATCH -J s2v_qwen3_audit
 #SBATCH --output={control_dir}/output_audit_%j.txt
 #SBATCH --error={control_dir}/output_audit_%j.txt
 #SBATCH --mail-type=ALL
@@ -325,16 +331,27 @@ def main():
         "--dry-run", action="store_true",
         help="Run preflight and write scripts, but do not migrate manifests or submit.",
     )
+    parser.add_argument(
+        "--only", choices=MODEL_SLUGS, default="qwen3-4b-base",
+        help=(
+            "Recover only this model family. Defaults to qwen3-4b-base; select "
+            "qwen3-1.7b-base while the 4B recovery is already running."
+        ),
+    )
     args = parser.parse_args()
 
-    manifests = preflight()
+    runs = tuple(run for run in RUNS if run["model_slug"] == args.only)
+    manifests = preflight(runs)
     stamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-    control_dir = SCRATCH_ROOT / f"recovery_qwen3_4b_{stamp}"
+    selection_tag = args.only.replace(".", "_").replace("-", "_")
+    control_dir = SCRATCH_ROOT / f"recovery_{selection_tag}_{stamp}"
     control_dir.mkdir(parents=False, exist_ok=False)
 
     job_paths = []
-    for index, run in enumerate(RUNS):
-        job_path = control_dir / f"job_{index}_{run['variant']}.json"
+    for index, run in enumerate(runs):
+        job_path = control_dir / (
+            f"job_{index}_{run['model_slug']}_{run['variant']}.json"
+        )
         job_path.write_text(
             json.dumps(build_job(run), indent=2) + "\n", encoding="utf-8"
         )
@@ -345,8 +362,8 @@ def main():
 
     print(f"\nRecovery control directory: {control_dir}")
     print(
-        f"Load distribution: {len(RUNS)} variants x {NUM_SHARDS} shards = "
-        f"{len(RUNS) * NUM_SHARDS} tasks, capped at {MAX_CONCURRENT_GPUS} H200s"
+        f"Load distribution: {len(runs)} run(s) x {NUM_SHARDS} shards = "
+        f"{len(runs) * NUM_SHARDS} tasks, capped at {MAX_CONCURRENT_GPUS} H200s"
     )
     print(f"Batch size: {BATCH_SIZE}, with recursive OOM splitting")
 

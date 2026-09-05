@@ -193,6 +193,22 @@ class TestHpc6RecoveryLauncher(unittest.TestCase):
             self.assertIn("--oom_split", text)
             self.assertIn("--require_complete_shard", text)
 
+    def test_17b_last_run_uses_matching_adapter(self):
+        run = next(
+            run for run in self.launcher.RUNS
+            if run["model_slug"] == "qwen3-1.7b-base"
+        )
+        self.assertEqual(run["variant"], "4096_last")
+        self.assertEqual(
+            run["adapter_dir"].name,
+            "adapter_model_out_embeddings_4096_last_full_qwen3-1.7b-base",
+        )
+        self.assertEqual(
+            run["output_dir"].name,
+            "reconstructions_4096_last__via__"
+            "embeddings_4096_last_full_qwen3-1.7b-base",
+        )
+
 
 if __name__ == '__main__':
     unittest.main()
