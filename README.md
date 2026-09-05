@@ -98,6 +98,23 @@ python 3_json_reconstruction.py --projector_model adapter_model_out/best_project
 
 Indexes are always the respective element in the dataset, e.g., index 1 equals toembeddings/ 1.npz. 
 
+### Recovering the five Qwen3-4B-Base runs on HPC
+
+After placing the five adapters, embeddings, and partial reconstruction folders
+directly in `/lustre/scratch/sgjolieb-screen2vec`, run the dedicated recovery
+launcher on the HPC login node:
+
+```bash
+cd /lustre/scratch/sgjolieb-screen2vec/screen2vec-revisited
+python hpc/_hpc6_resume_qwen3_4b_reconstructions.py --dry-run
+python hpc/_hpc6_resume_qwen3_4b_reconstructions.py
+```
+
+It submits five variants times eight shards as a 40-task Slurm array capped at
+eight concurrent H200s. Each task uses batch size 64, recursively splits a batch
+on CUDA OOM, and skips IDs that already have a successful reconstruction/report
+pair. A dependent CPU job audits all five folders for 66,261 complete pairs.
+
 Important Notes:
 - The original screen2vec paper is stored in the file "screen2vec.txt". Please read it.
 - The original source code is stored in folder "screen2vec-master".

@@ -515,10 +515,89 @@ def pending_items(items, output_dir):
         rico_id = item["rico_id"]
         reconstructed = os.path.join(output_dir, f"{rico_id}_reconstructed.json")
         report = os.path.join(output_dir, f"{rico_id}_report.txt")
-        if os.path.exists(reconstructed) and os.path.exists(report):
-            continue
+        try:
+            complete = (
+                os.path.getsize(reconstructed) > 0
+                and os.path.getsize(report) > 0
+            )
+            if complete:
+                with open(report, encoding="utf-8", errors="replace") as f:
+                    complete = not f.read(32).startswith("ERROR processing")
+            if complete:
+                continue
+        except OSError:
+            pass
         pending.append(item)
     return pending
+
+
+def audit_output_dir(output_dir, embeddings_dir, expected_count=0):
+    """Return and print a strict completeness audit for one reconstruction."""
+    output_path = Path(output_dir)
+    embeddings_path = Path(embeddings_dir)
+
+    expected_ids = set()
+    for path in embeddings_path.glob("*.npz"):
+        try:
+            expected_ids.add(int(path.stem))
+        except ValueError:
+            pass
+
+    reconstructed_ids = {
+        int(match.group(1))
+        for path in output_path.glob("*_reconstructed.json")
+        if (match := re.match(r"^(\d+)_reconstructed\.json$", path.name))
+        and path.stat().st_size > 0
+    }
+    report_ids = set()
+    error_report_ids = set()
+    for path in output_path.glob("*_report.txt"):
+        match = re.match(r"^(\d+)_report\.txt$", path.name)
+        if match is None or path.stat().st_size == 0:
+            continue
+        rico_id = int(match.group(1))
+        report_ids.add(rico_id)
+        with open(path, encoding="utf-8", errors="replace") as f:
+            if f.read(32).startswith("ERROR processing"):
+                error_report_ids.add(rico_id)
+
+    missing_reconstructions = expected_ids - reconstructed_ids
+    missing_reports = expected_ids - report_ids
+    unexpected_ids = (reconstructed_ids | report_ids) - expected_ids
+    complete_ids = (
+        expected_ids & reconstructed_ids & report_ids
+    ) - error_report_ids
+    tmp_files = list(output_path.glob("*.tmp"))
+
+    expected_count_ok = not expected_count or len(expected_ids) == expected_count
+    ok = (
+        expected_count_ok
+        and len(complete_ids) == len(expected_ids)
+        and not missing_reconstructions
+        and not missing_reports
+        and not error_report_ids
+        and not unexpected_ids
+        and not tmp_files
+    )
+    result = {
+        "ok": ok,
+        "expected": len(expected_ids),
+        "complete": len(complete_ids),
+        "reconstructed": len(reconstructed_ids),
+        "reports": len(report_ids),
+        "missing_reconstructions": len(missing_reconstructions),
+        "missing_reports": len(missing_reports),
+        "error_reports": len(error_report_ids),
+        "unexpected_ids": len(unexpected_ids),
+        "tmp_files": len(tmp_files),
+    }
+
+    print(f"[Audit] {output_path}")
+    for key, value in result.items():
+        if key != "ok":
+            print(f"  {key:<25}: {value}")
+    print(f"  {'status':<25}: {'COMPLETE' if ok else 'INCOMPLETE'}")
+    return result
 
 
 # =============================================================================
@@ -897,6 +976,57 @@ def generate_for_group(
     return decode_generated_batch(tokenizer, generated_ids, tokenizer.eos_token_id)
 
 
+def is_cuda_oom(error):
+    """Recognise PyTorch CUDA OOMs without requiring a CUDA device in tests."""
+    oom_type = getattr(torch, "OutOfMemoryError", ())
+    return (
+        (oom_type and isinstance(error, oom_type))
+        or "out of memory" in str(error).lower()
+    )
+
+
+def generate_with_oom_splitting(items, arrays, generate, cleanup=None):
+    """
+    Generate one batch, recursively halving it when CUDA runs out of memory.
+
+    Returns a list of ``(items, texts)`` groups because each successful retry
+    can have a different size. A batch-size-one OOM remains fatal.
+    """
+    should_split = False
+    try:
+        texts = generate(arrays)
+        if len(texts) != len(items):
+            raise RuntimeError(
+                f"generation returned {len(texts)} texts for {len(items)} items"
+            )
+        return [(items, texts)]
+    except Exception as error:
+        if not is_cuda_oom(error) or len(items) <= 1:
+            raise
+        should_split = True
+        print(
+            f"[OOM recovery] Splitting batch of {len(items)} into "
+            f"{len(items) // 2} + {len(items) - len(items) // 2}",
+            flush=True,
+        )
+
+    # Retry outside the exception handler so its traceback cannot retain the
+    # failed batch's KV cache while the smaller batches are attempted.
+    if should_split:
+        if cleanup is not None:
+            cleanup()
+        midpoint = len(items) // 2
+        left = generate_with_oom_splitting(
+            items[:midpoint], arrays[:midpoint], generate, cleanup
+        )
+        right = generate_with_oom_splitting(
+            items[midpoint:], arrays[midpoint:], generate, cleanup
+        )
+        return left + right
+
+    raise AssertionError("unreachable")
+
+
 # =============================================================================
 # GPU Worker Function (runs in a spawned subprocess)
 # =============================================================================
@@ -1116,12 +1246,22 @@ def gpu_worker(worker_id, num_workers, dataset, args):
             for items, arrays in groups:
                 batch_start = time.time()
                 try:
-                    texts = generate_for_group(
-                        arrays, projector, lm_model, tokenizer, device,
-                        model_dtype, args.max_tokens, prefix_forward_kwargs,
-                        repetition_penalty=args.repetition_penalty,
-                        json_guided=args.json_guided,
-                    )
+                    def generate(sub_arrays):
+                        return generate_for_group(
+                            sub_arrays, projector, lm_model, tokenizer, device,
+                            model_dtype, args.max_tokens, prefix_forward_kwargs,
+                            repetition_penalty=args.repetition_penalty,
+                            json_guided=args.json_guided,
+                        )
+
+                    if args.oom_split:
+                        generated_groups = generate_with_oom_splitting(
+                            items, arrays, generate,
+                            cleanup=(torch.cuda.empty_cache
+                                     if device.type == "cuda" else None),
+                        )
+                    else:
+                        generated_groups = [(items, generate(arrays))]
                 except Exception as error:
                     # One bad batch must not take the whole shard down; the
                     # items stay unreported and a rerun will pick them up.
@@ -1133,6 +1273,8 @@ def gpu_worker(worker_id, num_workers, dataset, args):
                     # leaves the allocator fragmented enough to fail the next.
                     if device.type == "cuda":
                         torch.cuda.empty_cache()
+                    if args.fail_on_error:
+                        raise
                     failures += len(items)
                     generated_count += len(items)
                     continue
@@ -1145,7 +1287,8 @@ def gpu_worker(worker_id, num_workers, dataset, args):
                 payloads = [
                     (item["rico_id"], item["json_path"], item["embedding_path"],
                      text, args.output_dir, per_item, args.json_repair)
-                    for item, text in zip(items, texts)
+                    for generated_items, texts in generated_groups
+                    for item, text in zip(generated_items, texts)
                 ]
 
                 if eval_pool is None:
@@ -1182,6 +1325,15 @@ def gpu_worker(worker_id, num_workers, dataset, args):
               f"outstanding scoring tasks...", flush=True)
         collect(pending_futures, block=True)
         eval_pool.shutdown(wait=True)
+
+    if args.require_complete_shard:
+        remaining = pending_items(worker_dataset, args.output_dir)
+        if remaining:
+            sample = ", ".join(str(item["rico_id"]) for item in remaining[:10])
+            raise RuntimeError(
+                f"Shard is incomplete: {len(remaining)} assigned elements still "
+                f"lack a successful output pair. First IDs: {sample}"
+            )
 
     worker_elapsed = time.time() - worker_start
     print(
@@ -1423,6 +1575,21 @@ def build_arg_parser():
         ),
     )
     parser.add_argument(
+        "--oom_split", action="store_true",
+        help=(
+            "On CUDA OOM, recursively halve the failed batch and retry it. "
+            "A batch-size-one OOM remains fatal."
+        ),
+    )
+    parser.add_argument(
+        "--fail_on_error", action="store_true",
+        help="Fail the worker instead of skipping a batch that cannot be generated.",
+    )
+    parser.add_argument(
+        "--require_complete_shard", action="store_true",
+        help="Before exiting, require successful output pairs for this shard's IDs.",
+    )
+    parser.add_argument(
         "--output_dir", type=str, default="reconstructions_qwen3.5-4B",
         help=(
             "Output directory for reconstructed JSONs and reports. Shared by "
@@ -1450,6 +1617,14 @@ def build_arg_parser():
             "--output_dir and print aggregate metrics. Used by the aggregation "
             "job that runs after the array finishes."
         ),
+    )
+    parser.add_argument(
+        "--audit", action="store_true",
+        help="Audit output completeness against the embedding IDs, then exit.",
+    )
+    parser.add_argument(
+        "--expected_count", type=int, default=0,
+        help="With --audit, require exactly this many embedding IDs (0 disables).",
     )
     return parser
 
@@ -1503,6 +1678,14 @@ def main():
 
     if args.job_json:
         args = apply_job_json(args, parser)
+
+    if args.audit:
+        result = audit_output_dir(
+            args.output_dir, args.embeddings_dir, args.expected_count
+        )
+        if not result["ok"]:
+            raise SystemExit(1)
+        return
 
     if args.summarize:
         summarize_output_dir(args.output_dir)
@@ -1571,12 +1754,17 @@ def main():
             processes.append(p)
             print(f"[Main] Started worker {worker_id} (PID: {p.pid})")
 
+        failed_workers = []
         for worker_id, p in enumerate(processes):
             p.join()
             if p.exitcode != 0:
                 print(f"[Main] WARNING: Worker {worker_id} exited with code {p.exitcode}")
+                failed_workers.append((worker_id, p.exitcode))
             else:
                 print(f"[Main] Worker {worker_id} completed successfully")
+
+        if failed_workers:
+            raise RuntimeError(f"GPU workers failed: {failed_workers}")
 
     total_elapsed = time.time() - total_start
 
