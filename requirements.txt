@@ -17,6 +17,7 @@ rapidfuzz
 optree>=0.13.0
 json-repair
 seaborn>=0.13
+scipy>=1.14
 ipykernel>=6.29
 jupyterlab>=4.2
 numpy>=1.26
