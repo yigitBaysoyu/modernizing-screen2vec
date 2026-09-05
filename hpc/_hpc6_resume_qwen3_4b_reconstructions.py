@@ -264,7 +264,7 @@ srun python "{RECONSTRUCTION_SCRIPT}" \\
     --fail_on_error \\
     --require_complete_shard
 """
-    path.write_text(content, encoding="utf-8", newline="\n")
+    path.write_text(content, encoding="utf-8")
 
 
 def write_audit_script(path, control_dir, array_job_id, job_paths):
@@ -303,7 +303,7 @@ for job_json in "${{job_files[@]}}"; do
     srun python "{RECONSTRUCTION_SCRIPT}" --job_json "$job_json" --summarize
 done
 """
-    path.write_text(content, encoding="utf-8", newline="\n")
+    path.write_text(content, encoding="utf-8")
 
 
 def submit(script_path):
