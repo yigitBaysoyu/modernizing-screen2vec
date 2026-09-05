@@ -107,6 +107,8 @@ def count_complete_pairs(output_dir):
 def preflight():
     problems = []
     manifests = []
+    reference_embedding_ids = None
+    reference_variant = None
 
     if not RECONSTRUCTION_SCRIPT.is_file():
         problems.append(f"reconstruction script missing: {RECONSTRUCTION_SCRIPT}")
@@ -134,10 +136,20 @@ def preflight():
                     embedding_ids.add(int(path.stem))
                 except ValueError:
                     problems.append(f"non-numeric embedding filename: {path}")
-            if embedding_ids != set(range(EXPECTED_COUNT)):
+            if len(embedding_ids) != EXPECTED_COUNT:
                 problems.append(
-                    f"{variant}: expected embedding IDs 0..{EXPECTED_COUNT - 1}, "
-                    f"found {len(embedding_ids)} unique numeric IDs"
+                    f"{variant}: expected {EXPECTED_COUNT} unique numeric embedding "
+                    f"IDs, found {len(embedding_ids)}"
+                )
+            if reference_embedding_ids is None:
+                reference_embedding_ids = embedding_ids
+                reference_variant = variant
+            elif embedding_ids != reference_embedding_ids:
+                missing = len(reference_embedding_ids - embedding_ids)
+                extra = len(embedding_ids - reference_embedding_ids)
+                problems.append(
+                    f"{variant}: embedding ID set differs from {reference_variant} "
+                    f"({missing} missing, {extra} extra)"
                 )
 
         record = None
@@ -165,6 +177,7 @@ def preflight():
         )
         print(
             f"  {variant:<16} embeddings={len(embedding_ids):>5}  "
+            f"ids={min(embedding_ids, default=0)}..{max(embedding_ids, default=0)}  "
             f"complete={complete:>5}  pending={EXPECTED_COUNT - complete:>5}  "
             f"error_reports={errors}"
         )
