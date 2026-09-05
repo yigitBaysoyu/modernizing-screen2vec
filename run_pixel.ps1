@@ -66,6 +66,8 @@ $RicoLayoutsDirectory = (
 New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
 
 $completedCount = 0
+$invalidCount = 0
+$invalidRunIds = @()
 $skippedCount = 0
 $skippedRunIds = @()
 
@@ -158,10 +160,26 @@ foreach ($runId in $StartRunId..$EndRunId) {
         exit $exitCode
     }
 
-    $completedCount++
+    $runInvalid = Select-String `
+        -LiteralPath $logPath `
+        -SimpleMatch "[RUN INVALID]" `
+        -Quiet
 
-    "[WRAPPER] Run $runId completed successfully." |
-        Tee-Object -FilePath $logPath -Append
+    if ($runInvalid) {
+        $invalidCount++
+        $invalidRunIds += $runId
+
+        @(
+            "[WRAPPER] Run $runId completed with a recoverable request failure."
+            "[WRAPPER] The run is invalid for analysis; continuing with run $($runId + 1)."
+        ) | Tee-Object -FilePath $logPath -Append
+    }
+    else {
+        $completedCount++
+
+        "[WRAPPER] Run $runId completed successfully." |
+            Tee-Object -FilePath $logPath -Append
+    }
 }
 
 $summaryLines = @(
@@ -169,8 +187,13 @@ $summaryLines = @(
     "=== Final wrapper summary ==="
     "Requested range: $StartRunId through $EndRunId"
     "Successfully completed: $completedCount"
+    "Invalid but nonfatal runs: $invalidCount"
     "Skipped because JPG was missing: $skippedCount"
 )
+
+if ($invalidCount -gt 0) {
+    $summaryLines += "Invalid run IDs: $($invalidRunIds -join ', ')"
+}
 
 if ($skippedCount -gt 0) {
     $summaryLines += "Skipped run IDs: $($skippedRunIds -join ', ')"

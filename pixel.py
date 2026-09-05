@@ -507,7 +507,72 @@ def print_process_memory(server_pid, memory_before, memory_after):
         print(f"[RESULT] {label}: {formatted} [PID {server_pid}]")
 
 
+class RecoverableRequestError(RuntimeError):
+    """A failure confined to one embedding payload, not the whole batch."""
+
+
+def response_error_detail(response):
+    """Return the server's useful error text without assuming a JSON schema."""
+    body = response.text.strip()
+
+    if not body:
+        return "empty response body"
+
+    try:
+        payload = response.json()
+    except requests.exceptions.JSONDecodeError:
+        return " ".join(body.split())
+
+    if isinstance(payload, dict):
+        error = payload.get("error")
+        if isinstance(error, dict) and error.get("message"):
+            return str(error["message"])
+        if error:
+            return str(error)
+
+    return " ".join(body.split())
+
+
+def parse_embedding_response(response):
+    """Validate the small part of llama-server's response schema we use."""
+    try:
+        payload = response.json()
+    except requests.exceptions.JSONDecodeError as error:
+        raise RecoverableRequestError(
+            "llama-server returned HTTP 200 but not valid JSON: "
+            f"{response_error_detail(response)}"
+        ) from error
+
+    try:
+        embedding = payload[0]["embedding"][0]
+    except (IndexError, KeyError, TypeError) as error:
+        raise RecoverableRequestError(
+            "llama-server returned an unexpected embedding response shape"
+        ) from error
+
+    if not isinstance(embedding, list) or not embedding:
+        raise RecoverableRequestError(
+            "llama-server returned an empty or invalid embedding vector"
+        )
+
+    return payload, len(embedding)
+
+
+def show_request_server_logs():
+    run_remote(
+        "tail -n 30 ~/qwen3-vl-embedding/llama-server.log",
+        "Show final llama-server log lines for this request",
+        check=False,
+    )
+    run_remote(
+        "tail -n 30 ~/qwen3-vl-embedding/llama-server-console.log",
+        "Show final llama-server console lines for this request",
+        check=False,
+    )
+
+
 results = []
+request_failures = []
 server_pid = None
 
 try:
@@ -555,152 +620,179 @@ try:
 
         print(f"\n=== Request {request_number}/3: {request_name} ===")
 
-        stop_llama_servers(
-            expected_pid=server_pid,
-            description="Pre-launch cleanup",
-        )
-        server_pid = None
+        try:
+            stop_llama_servers(
+                expected_pid=server_pid,
+                description="Pre-launch cleanup",
+            )
+            server_pid = None
 
-        server_pid = launch_llama_server()
-        wait_for_llama_server(server_pid)
+            server_pid = launch_llama_server()
+            wait_for_llama_server(server_pid)
 
-        # Keep the extra SSH commands outside the battery measurement window.
-        memory_before = read_process_memory(server_pid)
-        battery_before = read_battery(f"before {request_name}")
+            # Keep extra SSH commands outside the battery measurement window.
+            memory_before = read_process_memory(server_pid)
+            battery_before = read_battery(f"before {request_name}")
 
-        request_size = len(
-            json.dumps(body, separators=(",", ":")).encode("utf-8")
-        )
-
-        print(f"[HTTP] Sending request to {url}")
-        print(f"[HTTP] Request body size: {request_size:,} bytes")
-        print(f"[HTTP] Start time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
-
-        start = time.perf_counter()
-        response = requests.post(
-            url,
-            json=body,
-            timeout=(
-                http_connect_timeout_seconds,
-                http_read_timeout_seconds,
-            ),
-        )
-        elapsed = time.perf_counter() - start
-
-        print(f"[HTTP] End time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"[HTTP] Status code: {response.status_code}")
-        print(
-            f"[HTTP] Response size: "
-            f"{len(response.text.encode('utf-8')):,} bytes"
-        )
-        print(f"[HTTP] Response time: {elapsed:.3f} seconds")
-
-        battery_after = read_battery(f"after {request_name}")
-        memory_after = read_process_memory(server_pid)
-
-        response.raise_for_status()
-        embeddings = response.json()
-
-        energy_before = battery_before.get("energy")
-        energy_after = battery_after.get("energy")
-        charge_before = battery_before.get("charge_counter")
-        charge_after = battery_after.get("charge_counter")
-        voltage_before = battery_before.get("voltage")
-        voltage_after = battery_after.get("voltage")
-        current_before = battery_before.get("current")
-        current_after = battery_after.get("current")
-
-        used_microamp_hours = None
-        mean_voltage_volts = None
-
-        if charge_before is not None and charge_after is not None:
-            used_microamp_hours = charge_before - charge_after
-
-        if voltage_before is not None and voltage_after is not None:
-            mean_voltage_volts = (
-                (voltage_before + voltage_after) / 2
-            ) / 1_000
-
-        if energy_before is not None and energy_after is not None:
-            measurement_method = "Android energy counter"
-            energy_milliwatt_hours = (
-                energy_before - energy_after
-            ) / 1_000_000
-        elif used_microamp_hours is not None and mean_voltage_volts is not None:
-            measurement_method = "charge counter multiplied by mean voltage"
-            energy_milliwatt_hours = (
-                used_microamp_hours * mean_voltage_volts
-            ) / 1_000
-        else:
-            raise RuntimeError(
-                "The battery response does not contain enough values to "
-                "calculate energy consumption."
+            request_size = len(
+                json.dumps(body, separators=(",", ":")).encode("utf-8")
             )
 
-        energy_joules = energy_milliwatt_hours * 3.6
-        average_power_watts = energy_joules / elapsed
+            print(f"[HTTP] Sending request to {url}")
+            print(f"[HTTP] Request body size: {request_size:,} bytes")
+            print(f"[HTTP] Start time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
 
-        print("[HTTP] Full embedding response:")
-        print(response.text)
-        print(f"[RESULT] Embedding dimensions: {len(embeddings[0]['embedding'][0])}")
-        print(f"[RESULT] Response time: {elapsed:.3f} seconds")
-        print(f"[RESULT] Measurement method: {measurement_method}")
+            start = time.perf_counter()
+            try:
+                response = requests.post(
+                    url,
+                    json=body,
+                    timeout=(
+                        http_connect_timeout_seconds,
+                        http_read_timeout_seconds,
+                    ),
+                )
+            except requests.RequestException as error:
+                elapsed = time.perf_counter() - start
+                raise RecoverableRequestError(
+                    "HTTP request failed after "
+                    f"{elapsed:.3f} seconds: {type(error).__name__}: {error}"
+                ) from error
 
-        if used_microamp_hours is not None:
+            elapsed = time.perf_counter() - start
+
+            print(f"[HTTP] End time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+            print(f"[HTTP] Status code: {response.status_code}")
             print(
-                f"[RESULT] Battery charge used: "
-                f"{used_microamp_hours:.0f} microamp-hours"
+                f"[HTTP] Response size: "
+                f"{len(response.text.encode('utf-8')):,} bytes"
             )
+            print(f"[HTTP] Response time: {elapsed:.3f} seconds")
 
-        if mean_voltage_volts is not None:
+            battery_after = read_battery(f"after {request_name}")
+            memory_after = read_process_memory(server_pid)
+
+            if not response.ok:
+                print("[HTTP] Error response body:")
+                print(response.text or "<empty>")
+                raise RecoverableRequestError(
+                    f"llama-server rejected the payload with HTTP "
+                    f"{response.status_code}: {response_error_detail(response)}"
+                )
+
+            embeddings, embedding_dimensions = parse_embedding_response(response)
+
+            energy_before = battery_before.get("energy")
+            energy_after = battery_after.get("energy")
+            charge_before = battery_before.get("charge_counter")
+            charge_after = battery_after.get("charge_counter")
+            voltage_before = battery_before.get("voltage")
+            voltage_after = battery_after.get("voltage")
+            current_before = battery_before.get("current")
+            current_after = battery_after.get("current")
+
+            used_microamp_hours = None
+            mean_voltage_volts = None
+
+            if charge_before is not None and charge_after is not None:
+                used_microamp_hours = charge_before - charge_after
+
+            if voltage_before is not None and voltage_after is not None:
+                mean_voltage_volts = (
+                    (voltage_before + voltage_after) / 2
+                ) / 1_000
+
+            if energy_before is not None and energy_after is not None:
+                measurement_method = "Android energy counter"
+                energy_milliwatt_hours = (
+                    energy_before - energy_after
+                ) / 1_000_000
+            elif used_microamp_hours is not None and mean_voltage_volts is not None:
+                measurement_method = "charge counter multiplied by mean voltage"
+                energy_milliwatt_hours = (
+                    used_microamp_hours * mean_voltage_volts
+                ) / 1_000
+            else:
+                raise RecoverableRequestError(
+                    "The battery response does not contain enough values to "
+                    "calculate energy consumption."
+                )
+
+            energy_joules = energy_milliwatt_hours * 3.6
+            average_power_watts = energy_joules / elapsed
+
+            print("[HTTP] Full embedding response:")
+            print(response.text)
+            print(f"[RESULT] Embedding dimensions: {embedding_dimensions}")
+            print(f"[RESULT] Response time: {elapsed:.3f} seconds")
+            print(f"[RESULT] Measurement method: {measurement_method}")
+
+            if used_microamp_hours is not None:
+                print(
+                    f"[RESULT] Battery charge used: "
+                    f"{used_microamp_hours:.0f} microamp-hours"
+                )
+
+            if mean_voltage_volts is not None:
+                print(
+                    f"[RESULT] Mean battery voltage: "
+                    f"{mean_voltage_volts:.3f} V"
+                )
+
             print(
-                f"[RESULT] Mean battery voltage: "
-                f"{mean_voltage_volts:.3f} V"
+                f"[RESULT] Energy consumption: "
+                f"{energy_milliwatt_hours:.6f} mWh"
             )
+            print(f"[RESULT] Energy consumption: {energy_joules:.6f} J")
+            print(f"[RESULT] Average power: {average_power_watts:.6f} W")
 
-        print(
-            f"[RESULT] Energy consumption: "
-            f"{energy_milliwatt_hours:.6f} mWh"
-        )
-        print(f"[RESULT] Energy consumption: {energy_joules:.6f} J")
-        print(f"[RESULT] Average power: {average_power_watts:.6f} W")
+            if current_before is not None:
+                print(
+                    f"[RESULT] Battery current before: "
+                    f"{current_before / 1_000:.1f} mA"
+                )
 
-        if current_before is not None:
+            if current_after is not None:
+                print(
+                    f"[RESULT] Battery current after: "
+                    f"{current_after / 1_000:.1f} mA"
+                )
+
+            print_process_memory(server_pid, memory_before, memory_after)
+            show_request_server_logs()
+
+            results.append(
+                {
+                    "request": request_name,
+                    "response_time_seconds": elapsed,
+                    "measurement_method": measurement_method,
+                    "energy_milliwatt_hours": energy_milliwatt_hours,
+                    "energy_joules": energy_joules,
+                    "average_power_watts": average_power_watts,
+                }
+            )
+        except RecoverableRequestError as error:
+            failure = " ".join(str(error).split())
+            print(f"[REQUEST SKIPPED] {request_name}: {failure}")
             print(
-                f"[RESULT] Battery current before: "
-                f"{current_before / 1_000:.1f} mA"
+                f"[RUN INVALID] {request_name} failed; exclude this entire "
+                "run from analysis and skip its remaining requests."
             )
-
-        if current_after is not None:
-            print(
-                f"[RESULT] Battery current after: "
-                f"{current_after / 1_000:.1f} mA"
+            show_request_server_logs()
+            request_failures.append(
+                {
+                    "request": request_name,
+                    "error": failure,
+                }
             )
-
-        print_process_memory(server_pid, memory_before, memory_after)
-
-        run_remote(
-            "tail -n 30 ~/qwen3-vl-embedding/llama-server.log",
-            "Show final llama-server log lines for this request",
-            check=False,
-        )
-
-        results.append(
-            {
-                "request": request_name,
-                "response_time_seconds": elapsed,
-                "measurement_method": measurement_method,
-                "energy_milliwatt_hours": energy_milliwatt_hours,
-                "energy_joules": energy_joules,
-                "average_power_watts": average_power_watts,
-            }
-        )
-
-        stop_llama_servers(
-            expected_pid=server_pid,
-            description="Post-measurement shutdown",
-        )
-        server_pid = None
+            break
+        finally:
+            if server_pid is not None:
+                stop_llama_servers(
+                    expected_pid=server_pid,
+                    description="Post-request shutdown",
+                )
+                server_pid = None
 finally:
     print("\n=== Final cleanup ===")
     print("Shutting down llama-server ...")
@@ -726,3 +818,11 @@ for result in results:
         f"{result['average_power_watts']:.6f} W, "
         f"{result['measurement_method']}"
     )
+
+for failure in request_failures:
+    print(f"{failure['request']}: SKIPPED - {failure['error']}")
+
+print(
+    f"Completed requests: {len(results)}/{len(requests_to_run)}; "
+    f"skipped recoverable request failures: {len(request_failures)}"
+)
