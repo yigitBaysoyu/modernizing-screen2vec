@@ -1,0 +1,6 @@
+metric,value
+10-NN category purity,0.42819999999999997
+frequency chance purity,0.08333333333333334
+permutation mean purity,0.08304786666666666
+permutation p-value,0.001996007984031936
+cosine silhouette,-0.050324421375989914
