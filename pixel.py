@@ -439,6 +439,74 @@ def read_battery(label):
     return battery
 
 
+def read_process_memory(server_pid):
+    """Quietly read this server's kernel-reported resident RAM in MiB.
+
+    VmHWM retains the process-lifetime RSS high-water mark, including model
+    startup and short-lived inference allocations, without a polling loop.
+    These are OS accounting estimates, not PSS or virtual memory sizes.
+    See https://man7.org/linux/man-pages/man5/proc_pid_status.5.html
+    """
+    channel = None
+
+    try:
+        _, stdout, stderr = ssh.exec_command(
+            f"cat /proc/{int(server_pid)}/status",
+            timeout=5,
+        )
+        channel = stdout.channel
+        status_text = stdout.read().decode("utf-8")
+        error_text = stderr.read().decode("utf-8").strip()
+        exit_status = channel.recv_exit_status()
+
+        if exit_status != 0:
+            raise RuntimeError(error_text or f"Remote exit status {exit_status}")
+
+        values = {
+            match.group(1): int(match.group(2)) / 1024
+            for match in re.finditer(
+                r"^(VmRSS|VmHWM):\s+(\d+)\s+kB\s*$",
+                status_text,
+                re.MULTILINE,
+            )
+        }
+
+        return {
+            "rss_mib": values.get("VmRSS"),
+            "peak_rss_mib": values.get("VmHWM"),
+            "error": None,
+        }
+    except Exception as error:
+        # A missing /proc permission or a failed read must not abort the run.
+        return {
+            "rss_mib": None,
+            "peak_rss_mib": None,
+            "error": " ".join(f"{type(error).__name__}: {error}".split()),
+        }
+    finally:
+        if channel is not None:
+            channel.close()
+
+
+def print_process_memory(server_pid, memory_before, memory_after):
+    for label, snapshot, key in (
+        ("Process RSS before request", memory_before, "rss_mib"),
+        ("Process RSS after request", memory_after, "rss_mib"),
+        (
+            "Process peak RSS (startup + request, VmHWM)",
+            memory_after,
+            "peak_rss_mib",
+        ),
+    ):
+        value = snapshot[key]
+        if value is None:
+            reason = snapshot["error"] or "Field missing from /proc status"
+            formatted = f"unavailable ({reason})"
+        else:
+            formatted = f"{value:.3f} MiB"
+        print(f"[RESULT] {label}: {formatted} [PID {server_pid}]")
+
+
 results = []
 server_pid = None
 
@@ -496,6 +564,8 @@ try:
         server_pid = launch_llama_server()
         wait_for_llama_server(server_pid)
 
+        # Keep the extra SSH commands outside the battery measurement window.
+        memory_before = read_process_memory(server_pid)
         battery_before = read_battery(f"before {request_name}")
 
         request_size = len(
@@ -526,6 +596,7 @@ try:
         print(f"[HTTP] Response time: {elapsed:.3f} seconds")
 
         battery_after = read_battery(f"after {request_name}")
+        memory_after = read_process_memory(server_pid)
 
         response.raise_for_status()
         embeddings = response.json()
@@ -605,6 +676,8 @@ try:
                 f"[RESULT] Battery current after: "
                 f"{current_after / 1_000:.1f} mA"
             )
+
+        print_process_memory(server_pid, memory_before, memory_after)
 
         run_remote(
             "tail -n 30 ~/qwen3-vl-embedding/llama-server.log",
