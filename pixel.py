@@ -12,9 +12,9 @@ from utils import process_json_file
 
 
 folder = Path(r"C:\Users\Jonathan\Dev\rico-data\data\layouts")
-url = "http://192.168.137.135:8080/embeddings"
+url = "http://10.95.154.240:8080/embeddings"
 
-ssh_host = "192.168.137.135"
+ssh_host = "10.95.154.240"
 ssh_port = 8022
 ssh_username = "u0_a285"
 ssh_password = "0000"
