@@ -98,6 +98,25 @@ python 3_json_reconstruction.py --projector_model adapter_model_out/best_project
 
 Indexes are always the respective element in the dataset, e.g., index 1 equals toembeddings/ 1.npz. 
 
+### Fresh Qwen3-4B-Base 64x4096 training and reconstruction
+
+To train the adapter and immediately reconstruct all screens using eight H200s,
+run the dedicated all-in-one launcher from the checkout on the HPC login node:
+
+```bash
+python hpc/_hpc7_qwen3_4b_64x4096_all_in_one.py --dry-run
+python hpc/_hpc7_qwen3_4b_64x4096_all_in_one.py
+```
+
+It submits one exclusive 8-GPU training job, an eight-shard reconstruction
+array dependent on successful training, and a final audit/summary job.
+Reconstruction starts at batch size 64 and recursively halves a batch on CUDA
+OOM. Successful output pairs are skipped automatically on a Slurm rerun; the
+final audit runs even when an array task fails and reports any remaining IDs.
+The fresh task copy explicitly excludes any existing adapter and reconstruction
+directories with the same names, so a stability rerun cannot silently reuse an
+old checkpoint or skip old predictions.
+
 ### Recovering the five Qwen3-4B-Base runs on HPC
 
 After placing the five adapters, embeddings, and partial reconstruction folders

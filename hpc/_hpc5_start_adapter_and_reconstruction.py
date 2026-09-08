@@ -277,6 +277,9 @@ module load anaconda3/2023
 
 # Ensure user-installed python binaries are in PATH
 export PATH=$HOME/.local/bin:$PATH
+
+# Reduce allocator fragmentation during long, variable-length decoding runs.
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 """
 
 
@@ -394,7 +397,9 @@ srun python hpc/env.py
 srun python {script_name} \\
     --job_json job.json \\
     --shard_index ${{SLURM_ARRAY_TASK_ID:-0}} \\
-    --num_shards {NUM_SHARDS}
+    --num_shards {NUM_SHARDS} \\
+    --oom_split \\
+    --require_complete_shard
 """
 
     write_script(path, script_content)
@@ -412,7 +417,9 @@ def create_aggregate_script(path, array_job_id):
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user={MAIL_FROM}
 #SBATCH --nodes=1
-#SBATCH --dependency=afterok:{array_job_id}
+# Run the audit even if a shard failed, so an OOM or other incomplete shard is
+# reported explicitly instead of leaving this job pending forever.
+#SBATCH --dependency=afterany:{array_job_id}
 #SBATCH --partition=STD-s-96h
 #SBATCH --time=0-02:00:00
 
@@ -420,6 +427,12 @@ def create_aggregate_script(path, array_job_id):
 # Install requirements (CPU wheels are enough for the aggregation)
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
 pip install -r requirements.txt
+
+# AUDIT first: successful pairs are resumable, while missing/error outputs are
+# listed clearly. Only summarize a complete reconstruction directory.
+srun python 3_json_reconstruction_par.py \\
+    --audit \\
+    --job_json job.json
 
 # AGGREGATE: parse every report in the reconstruction directory
 srun python 3_json_reconstruction_par.py \\
