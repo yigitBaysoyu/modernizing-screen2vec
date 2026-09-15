@@ -463,6 +463,12 @@ def main():
                              "of those traces. Sets n_predictors = K. Artefacts get "
                              "a _nback{K} suffix.")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--artifact_tag", type=str, default="",
+                        help="Optional suffix appended to every artefact name "
+                             "after the protocol suffix (e.g. '_h4096_s43'), so "
+                             "a sweep over hidden widths or seeds cannot "
+                             "overwrite the canonical checkpoints. Default: "
+                             "empty, names are unchanged.")
     args = parser.parse_args()
 
     # --nback and --strict are different protocols; --strict must keep
@@ -489,6 +495,10 @@ def main():
         run_suffix = f"_nback{args.nback}"
     else:
         run_suffix = ""
+    # Checkpoints and the training plot carry the protocol suffix plus the
+    # optional --artifact_tag; with the default empty tag this is exactly the
+    # naming the notebooks and README expect.
+    run_suffix = run_suffix + args.artifact_tag
 
     if args.output_dir is None:
         args.output_dir = f"embeddings_seq_{args.proj_dim}{run_suffix}"

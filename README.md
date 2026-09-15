@@ -148,6 +148,44 @@ Important Notes:
 - The original screen2vec paper is stored in the file "screen2vec.txt". Please read it.
 - The original source code is stored in folder "screen2vec-master".
 
+## Screen observability: whitelist / blacklist for reconstruction
+
+Some RICO screens are drawn by components the view hierarchy cannot see (WebView,
+video/GL surfaces, game engines, ad containers, maps), so the cleaned JSON target
+holds one opaque box where the screenshot holds a whole page. `screen_observability.py`
+scores every layout by the fraction of the device frame covered by such opaque
+subtrees (an opaque-class component with no text anywhere below it) and blacklists a
+screen when that coverage is >= 0.5 or the cleaned screen is empty:
+
+```bash
+python screen_observability.py            # -> screen_observability.csv + .meta.json (about 20 s)
+```
+
+`_results_screen_observability.ipynb` reuses the scan, shows the coverage histogram
+and threshold sensitivity, the per-family and per-app breakdown, example screens, and
+exports `graphics/screen_observability/{whitelist,blacklist}_ids.txt` (global layout
+ids, one per line) for training arms restricted to either list.
+
+## Embedding-dimension sweep (Table 3)
+
+`4_sweep_embedding_dimensions.py` runs the joint Table 3 recipe below once per
+projection dimension and collects Top-1, Top-k%, MRR and nRMSE into
+`dimension_sweep/` (results JSON, table, CSV, curve figure). The D=768 point writes
+exactly the artefacts of `_run_table3_pipeline2.ps1`; other hidden widths and seeds
+get `_h<H>` / `_s<S>` suffixes via `9_train_joint.py --artifact_tag`, so they never
+overwrite the canonical checkpoints.
+
+```bash
+python 4_sweep_embedding_dimensions.py run --gpu 0                       # 32 ... 1024, permissive
+python 4_sweep_embedding_dimensions.py run --protocol strict --dims 64,256,768
+python 4_sweep_embedding_dimensions.py run --dims 32,128,768 --seeds 42,43,44   # mean +- std
+python 4_sweep_embedding_dimensions.py run --dims 768 --dry_run           # print the commands
+python 4_sweep_embedding_dimensions.py plot                               # regenerate outputs
+```
+
+Only Top-1 and MRR are informative (`FINDINGS.md` 2-3); the other columns are kept
+for completeness.
+
 ## Replicating & Beating Screen2Vec Table 3 (GUI Screen Prediction)
 
 To reproduce the results that significantly outperform Screen2Vec's Table 3 on the GUI Screen Prediction task, run the following pipeline sequence:

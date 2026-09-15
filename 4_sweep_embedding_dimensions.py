@@ -1,446 +1,395 @@
-# Embedding-dimension sweep for the Table 3 (GUI Screen Prediction) pipeline.
-#
-# Runs the README's replication recipe verbatim for each projection
-# dimension D — the ONLY thing that varies across sweep points is
-# --proj_dim; every other flag is left at the recipe/script default
-# (hidden_dim 1024, seed 42, full app descriptions, full evaluation):
-#
-#   1. 5_train_sequence_projector.py --proj_dim D
-#        -> embeddings_seq_D/
-#   2. 6_generate_app_context_embeddings.py
-#        --embeddings_dir embeddings_seq_D --output_dir embeddings_seq_D_with_app
-#        -> embeddings_seq_D_with_app/   (D + 768 app-description dims)
-#   3. 8_train_lstm_predictor.py --embeddings_dir embeddings_seq_D
-#        -> lstm_predictor_Dd.pth
-#   4. 4_evaluate_screen_prediction.py
-#        --embeddings_dir embeddings_seq_D_with_app --lstm_model lstm_predictor_Dd.pth
-#        -> Table 3 metrics (parsed from the comparison table)
-#
-# The D=768 point is therefore an exact re-execution of the README recipe
-# and should reproduce the documented Table-3-beating result.
-#
-# Results accumulate in dimension_sweep/results.json; after every completed
-# dimension the summary table (sweep_table.txt) and the curve figure
-# (sweep_curve.png) are regenerated. Completed dimensions are skipped on
-# re-run (--force to redo).
-#
-# Usage:
-#   # Full sweep (run in a screen session):
-#   python 4_sweep_embedding_dimensions.py run --gpu 0
-#
-#   # Selected dimensions:
-#   python 4_sweep_embedding_dimensions.py run --dims 64,768
-#
-#   # Regenerate table + figure from saved results only:
-#   python 4_sweep_embedding_dimensions.py plot
-#
-# --hidden_dim widens the projector's hidden layer (recipe default: 1024).
-# Values above 1024 are REQUIRED for proj_dim > 1024 (otherwise the output
-# is rank-limited by the hidden layer) and are a deliberate deviation from
-# the README recipe — discussed/approved 2026-07-28 in response to the
-# supervisor's dim=16/2048 request. Non-default hidden widths write fully
-# suffixed artifacts (embeddings_seq_D_h<H>/, lstm_predictor_Dd_h<H>.pth,
-# results_h<H>.json, ...) so the recipe-faithful hidden=1024 sweep results
-# are never overwritten. `plot --hidden_dim H` regenerates that sweep's
-# table/figure.
-#
-# --seeds runs each dimension once per seed (README TODO: error bars).
-# With more than one seed, results go to results<suffix>_seeds.json and the
-# table/figure report mean ± std per dimension. Seed-42 metrics already in
-# the single-seed results file are imported instead of re-run. Non-42-seed
-# intermediate artifacts (projected embeddings, app-context dirs, LSTM
-# checkpoint — ~130k files per dim x seed) are deleted after their metrics
-# are recorded; --keep_artifacts disables that.
-#
-#   # Seed repeats, all dims (in a screen session; ~30 min per dim x seed):
-#   python -u 4_sweep_embedding_dimensions.py run \
-#       --dims 16,32,64,128,256,512,768,1024,2048 --hidden_dim 4096 \
-#       --seeds 42,43,44,45,46 --gpu 2
+"""
+4_sweep_embedding_dimensions.py
 
+Embedding-dimension sweep for the Table 3 (GUI Screen Prediction) pipeline.
+
+Question answered: how small can the learned screen embedding be before
+next-screen retrieval stops beating Screen2Vec's Table 3?  Screen2Vec uses
+768 learned dimensions (+ 768 app-description dimensions).  The sweep runs
+the repository's *current* Table 3 recipe once per projection dimension D
+and collects the retrieval metrics into one table and one figure.
+
+The recipe is the joint pipeline of _run_table3_pipeline2.ps1, verbatim
+except for the dimension (and, optionally, hidden width / seed / protocol):
+
+    1. 9_train_joint.py  --proj_dim D  [--hidden_dim H] [--seed S] [--strict | --nback K]
+         -> embeddings_seq_D{proto}{tag}/        projected screen embeddings
+            lstm_predictor_Dd{proto}{tag}.pth    LSTM checkpoint
+            sequence_projector_Dd{proto}{tag}.pth
+    2. 6_generate_app_context_embeddings.py
+         -> embeddings_seq_D{proto}{tag}_with_app/   (D + 768 app dims)
+    3. 4_evaluate_screen_prediction.py  [--strict | --nback K]
+         -> Top-1, Top-k%, nRMSE, MRR, population sizes (parsed from stdout)
+
+{proto} is the protocol suffix the scripts themselves use ("" permissive,
+"_strict", "_nbackK"); {tag} is empty for the recipe defaults (hidden 1024,
+seed 42) and "_h<H>" / "_s<S>" otherwise, so the D=768 recipe point produces
+exactly the artefacts the notebooks already read, and a hidden-width or seed
+repeat can never overwrite them (9_train_joint.py --artifact_tag).
+
+Every stage resolves trace keys through trace_layout_index.csv (the scripts
+refuse to run without it); numbers from before the 2026-08-21 index fix are
+void and must not be mixed into a results file -- see FINDINGS.md.
+
+Reading the results (FINDINGS.md sections 2-3): Top-1 and MRR are the
+informative columns.  Top-0.1% and above are saturated by the app-description
+half (an app-only oracle already reaches 0.9968 at Top-0.1%), and normalised
+RMSE is not comparable to the paper's.  The figure therefore plots Top-1 and
+MRR on their own panel; the other columns are kept for completeness.
+
+Results accumulate in dimension_sweep/results{proto}{_hH}.json with one entry
+per (dimension, seed); the summary table, CSV and figure are regenerated after
+every completed run.  Completed (dimension, seed) pairs are skipped on re-run
+(--force to redo).  Per-stage logs go to dimension_sweep/logs/ (gitignored).
+
+Usage:
+    # Recipe sweep (permissive protocol, seed 42, hidden 1024):
+    python 4_sweep_embedding_dimensions.py run --gpu 0
+
+    # Screen2Vec's own population, selected dimensions:
+    python 4_sweep_embedding_dimensions.py run --protocol strict --dims 64,256,768
+
+    # Seed repeats (mean +- std, error bars); non-42 intermediates are deleted
+    # after their metrics are recorded unless --keep_artifacts:
+    python 4_sweep_embedding_dimensions.py run --dims 32,128,768 --seeds 42,43,44
+
+    # Dimensions above 1024 need a wider projector hidden layer:
+    python 4_sweep_embedding_dimensions.py run --dims 1024,2048 --hidden_dim 4096
+
+    # Show the commands without running anything:
+    python 4_sweep_embedding_dimensions.py run --dims 768 --dry_run
+
+    # Regenerate table / CSV / figure from the saved results:
+    python 4_sweep_embedding_dimensions.py plot [--protocol strict] [--hidden_dim 4096]
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
 import os
 import re
-import sys
-import json
-import argparse
-import importlib
+import shutil
+import statistics
 import subprocess
+import sys
 from datetime import datetime
+from pathlib import Path
 
-SWEEP_DIR = "dimension_sweep"
-RESULTS_PATH = os.path.join(SWEEP_DIR, "results.json")
-TABLE_PATH = os.path.join(SWEEP_DIR, "sweep_table.txt")
-FIGURE_PATH = os.path.join(SWEEP_DIR, "sweep_curve.png")
-LOG_DIR = os.path.join(SWEEP_DIR, "logs")
+import trace_index
 
-DEFAULT_DIMS = [32, 64, 128, 256, 512, 768, 1024]
+SWEEP_DIR = Path("dimension_sweep")
+DEFAULT_DIMS = (32, 64, 128, 256, 512, 768, 1024)
 RECIPE_HIDDEN_DIM = 1024
 RECIPE_SEED = 42
+RAW_EMBEDDINGS_DIR = "embeddings_4096_last"
 
-
-def apply_hidden_suffix(hidden_dim):
-    """Points the results/table/figure paths at this hidden width's own
-    files (recipe default 1024 keeps the original unsuffixed paths).
-    Returns the artifact suffix used for dirs/checkpoints/logs."""
-    global RESULTS_PATH, TABLE_PATH, FIGURE_PATH
-    if hidden_dim == RECIPE_HIDDEN_DIM:
-        return ""
-    suffix = f"_h{hidden_dim}"
-    RESULTS_PATH = os.path.join(SWEEP_DIR, f"results{suffix}.json")
-    TABLE_PATH = os.path.join(SWEEP_DIR, f"sweep_table{suffix}.txt")
-    FIGURE_PATH = os.path.join(SWEEP_DIR, f"sweep_curve{suffix}.png")
-    return suffix
-
-
-def apply_seeds_paths():
-    """Multi-seed mode: switch results/table/figure to the _seeds files
-    (nested schema: runs[dim][seed] = metrics)."""
-    global RESULTS_PATH, TABLE_PATH, FIGURE_PATH
-    RESULTS_PATH = RESULTS_PATH.replace(".json", "_seeds.json")
-    TABLE_PATH = TABLE_PATH.replace(".txt", "_seeds.txt")
-    FIGURE_PATH = FIGURE_PATH.replace(".png", "_seeds.png")
-
-
-def artifact_paths(dim, suffix, seed):
-    """Per-(dim, seed) artifact names. Seed 42 keeps the seedless names so
-    existing single-seed artifacts and results are reused, not duplicated."""
-    art = suffix + ("" if seed == RECIPE_SEED else f"_s{seed}")
-    emb_dir = f"embeddings_seq_{dim}{art}"
-    return art, emb_dir, f"{emb_dir}_with_app", f"lstm_predictor_{dim}d{art}.pth"
-
-METRIC_KEYS = ["top1", "top001pct", "top01pct", "top1pct", "top5pct", "nrmse"]
+METRIC_KEYS = ("top1", "top001pct", "top01pct", "top1pct", "top5pct", "nrmse", "mrr")
 METRIC_LABELS = {
     "top1": "Top-1", "top001pct": "Top-0.01%", "top01pct": "Top-0.1%",
-    "top1pct": "Top-1%", "top5pct": "Top-5%", "nrmse": "Norm.RMSE",
+    "top1pct": "Top-1%", "top5pct": "Top-5%", "nrmse": "Norm.RMSE", "mrr": "MRR",
+}
+POPULATION_KEYS = ("n_traces", "n_screens_in_traces", "n_instances")
+
+STAGES = {
+    "train": "9_train_joint.py",
+    "app": "6_generate_app_context_embeddings.py",
+    "eval": "4_evaluate_screen_prediction.py",
 }
 
 
 # =============================================================================
-# Results store
+# Naming: protocol suffix, artefact tag, result files
 # =============================================================================
-def load_results():
-    if os.path.exists(RESULTS_PATH):
-        with open(RESULTS_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
+def protocol_suffix(protocol: str, nback: int | None) -> str:
+    """The suffix 9_train_joint.py / 4_evaluate_screen_prediction.py use."""
+    if protocol == "strict":
+        return "_strict"
+    if protocol == "nback":
+        return f"_nback{nback}"
+    return ""
+
+
+def protocol_flags(protocol: str, nback: int | None) -> list[str]:
+    """Flags shared by the trainer and the evaluator (both must get them)."""
+    if protocol == "strict":
+        return ["--strict"]
+    if protocol == "nback":
+        return ["--nback", str(nback)]
+    return []
+
+
+def artifact_tag(hidden_dim: int, seed: int) -> str:
+    """Empty for the recipe defaults; otherwise _h<H>_s<S> parts as needed."""
+    tag = ""
+    if hidden_dim != RECIPE_HIDDEN_DIM:
+        tag += f"_h{hidden_dim}"
+    if seed != RECIPE_SEED:
+        tag += f"_s{seed}"
+    return tag
+
+
+def artifact_paths(dim: int, proto: str, tag: str) -> dict[str, str]:
+    stem = f"{dim}d{proto}{tag}"
+    emb_dir = f"embeddings_seq_{dim}{proto}{tag}"
+    return {
+        "emb_dir": emb_dir,
+        "app_dir": f"{emb_dir}_with_app",
+        "lstm": f"lstm_predictor_{stem}.pth",
+        "projector": f"sequence_projector_{stem}.pth",
+        "plot": f"joint_training_{stem}.png",
+    }
+
+
+class SweepPaths:
+    """Result files of one sweep configuration (protocol x hidden width)."""
+
+    def __init__(self, protocol: str, nback: int | None, hidden_dim: int, sweep_dir: Path = SWEEP_DIR):
+        suffix = protocol_suffix(protocol, nback)
+        if hidden_dim != RECIPE_HIDDEN_DIM:
+            suffix += f"_h{hidden_dim}"
+        self.sweep_dir = Path(sweep_dir)
+        self.results = self.sweep_dir / f"results{suffix}.json"
+        self.table = self.sweep_dir / f"sweep_table{suffix}.txt"
+        self.csv = self.sweep_dir / f"sweep_results{suffix}.csv"
+        self.figure = self.sweep_dir / f"sweep_curve{suffix}.png"
+        self.logs = self.sweep_dir / "logs"
+        self.suffix = suffix
+
+
+# =============================================================================
+# Results store: runs[dim][seed] = metrics
+# =============================================================================
+def load_results(paths: SweepPaths) -> dict:
+    if paths.results.exists():
+        with open(paths.results, "r", encoding="utf-8") as fh:
+            return json.load(fh)
     return {"meta": {}, "runs": {}}
 
 
-def save_results(results):
-    os.makedirs(SWEEP_DIR, exist_ok=True)
-    with open(RESULTS_PATH, "w", encoding="utf-8") as f:
-        json.dump(results, f, indent=2)
+def save_results(paths: SweepPaths, results: dict) -> None:
+    paths.sweep_dir.mkdir(parents=True, exist_ok=True)
+    with open(paths.results, "w", encoding="utf-8") as fh:
+        json.dump(results, fh, indent=2)
+
+
+def git_revision() -> str | None:
+    try:
+        return subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+
+def trace_index_meta(path: str) -> dict | None:
+    meta_path = Path(path).with_suffix(".meta.json")
+    if not meta_path.exists():
+        return None
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return {k: meta.get(k) for k in ("generated_utc", "mapped", "dropped", "coverage")}
 
 
 # =============================================================================
-# Pipeline stages (subprocesses; each stage streams to its own log file)
+# Stage execution
 # =============================================================================
-def run_stage(cmd, log_name, env):
-    os.makedirs(LOG_DIR, exist_ok=True)
-    log_path = os.path.join(LOG_DIR, log_name)
+def run_stage(cmd: list[str], log_path: Path, env: dict) -> Path:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
     print(f"    $ {' '.join(cmd)}")
     print(f"      (log: {log_path})")
-    with open(log_path, "w", encoding="utf-8") as log_f:
-        proc = subprocess.run(
-            cmd, stdout=log_f, stderr=subprocess.STDOUT, env=env
-        )
+    with open(log_path, "w", encoding="utf-8") as log_fh:
+        proc = subprocess.run(cmd, stdout=log_fh, stderr=subprocess.STDOUT, env=env)
     if proc.returncode != 0:
-        raise RuntimeError(
-            f"Stage failed (exit {proc.returncode}) — see {log_path}"
-        )
+        raise RuntimeError(f"Stage failed (exit {proc.returncode}); see {log_path}")
     return log_path
 
 
-def parse_eval_metrics(log_path, label):
-    """Extract the six metric floats from the 'Ours' row of the comparison
-    table printed by 4_evaluate_screen_prediction.py."""
-    row_re = re.compile(
-        re.escape(label) + r"\s+"
-        + r"\s+".join([r"([\d.]+)"] * 6)
-    )
-    with open(log_path, "r", encoding="utf-8") as f:
-        for line in f:
-            m = row_re.search(line)
-            if m:
-                return dict(zip(METRIC_KEYS, (float(g) for g in m.groups())))
-    raise RuntimeError(f"Could not find metrics row '{label}' in {log_path}")
+_MRR_RE = re.compile(r"MRR\s+([\d.]+)")
+_POP_RE = re.compile(
+    r"Eligible traces evaluated:\s*(\d+)\s*\((\d+) screens,\s*(\d+) prediction instances\)"
+)
 
 
-def run_dimension(dim, args, env, suffix="", seed=RECIPE_SEED):
-    """README recipe steps 1-4 for one projection dimension and seed."""
-    py = sys.executable
-    art, emb_dir, app_dir, lstm_path = artifact_paths(dim, suffix, seed)
-
-    # Recipe step 1: sequence projector
-    if os.path.isdir(emb_dir) and os.listdir(emb_dir):
-        print(f"    [skip] {emb_dir} already exists")
-    else:
-        print(f"  [1/4] Training projector ({dim}-dim, "
-              f"hidden {args.hidden_dim}, seed {seed})...")
-        run_stage(
-            [py, "5_train_sequence_projector.py",
-             "--proj_dim", str(dim),
-             "--hidden_dim", str(args.hidden_dim),
-             "--seed", str(seed),
-             "--output_dir", emb_dir,
-             "--embeddings_dir", args.embeddings_dir],
-            f"dim{dim}{art}_1_projector.log", env,
-        )
-
-    # Recipe step 2: app-context concatenation
-    if os.path.isdir(app_dir) and os.listdir(app_dir):
-        print(f"    [skip] {app_dir} already exists")
-    else:
-        print(f"  [2/4] Concatenating app-context embeddings...")
-        run_stage(
-            [py, "6_generate_app_context_embeddings.py",
-             "--embeddings_dir", emb_dir,
-             "--output_dir", app_dir],
-            f"dim{dim}{art}_2_appcontext.log", env,
-        )
-
-    # Recipe step 3: LSTM trace predictor (on screen embeddings)
-    if os.path.exists(lstm_path) and not args.force:
-        print(f"    [skip] {lstm_path} already exists")
-    else:
-        print(f"  [3/4] Training LSTM predictor on {emb_dir} "
-              f"(seed {seed})...")
-        run_stage(
-            [py, "8_train_lstm_predictor.py",
-             "--embeddings_dir", emb_dir,
-             "--seed", str(seed),
-             "--output", lstm_path],
-            f"dim{dim}{art}_3_lstm.log", env,
-        )
-
-    # Recipe step 4: evaluation on app-concatenated embeddings
-    print(f"  [4/4] Evaluating screen prediction (with app context)...")
-    label = f"OURS_{dim}"
-    eval_cmd = [py, "4_evaluate_screen_prediction.py",
-                "--embeddings_dir", app_dir,
-                "--lstm_model", lstm_path,
-                "--label", label]
-    if args.sample_fraction is not None:
-        eval_cmd += ["--sample_fraction", str(args.sample_fraction)]
-    log_path = run_stage(eval_cmd, f"dim{dim}{art}_4_eval.log", env)
-
-    metrics = parse_eval_metrics(log_path, label)
-    metrics["completed_at"] = datetime.now().isoformat(timespec="seconds")
-    metrics["seed"] = seed
+def parse_eval_metrics(text: str, label: str) -> dict:
+    """
+    Metrics of the labelled 'Ours' row in the comparison table printed by
+    4_evaluate_screen_prediction.py, plus the MRR line and the population
+    line printed after it.
+    """
+    row_re = re.compile(re.escape(label) + r"\s+" + r"\s+".join([r"([\d.]+)"] * 6))
+    metrics = None
+    for line in text.splitlines():
+        match = row_re.search(line)
+        if match:
+            values = [float(g) for g in match.groups()]
+            metrics = dict(zip(("top1", "top001pct", "top01pct", "top1pct", "top5pct", "nrmse"), values))
+            break
+    if metrics is None:
+        raise RuntimeError(f"Could not find the metrics row '{label}' in the evaluator output")
+    mrr = _MRR_RE.search(text)
+    metrics["mrr"] = float(mrr.group(1)) if mrr else float("nan")
+    pop = _POP_RE.search(text)
+    if pop:
+        metrics.update(zip(POPULATION_KEYS, (int(g) for g in pop.groups())))
     return metrics
 
 
-def cleanup_seed_artifacts(dim, suffix, seed):
-    """Removes the bulky per-seed intermediates once metrics are recorded.
-    Never touches seed-42 artifacts (they are shared with the single-seed
-    sweep)."""
-    import shutil
+def build_commands(dim: int, args, seed: int) -> list[tuple[str, list[str]]]:
+    """The three stage commands for one (dimension, seed), in order."""
+    py = sys.executable
+    proto = protocol_suffix(args.protocol, args.nback)
+    tag = artifact_tag(args.hidden_dim, seed)
+    art = artifact_paths(dim, proto, tag)
+    flags = protocol_flags(args.protocol, args.nback)
+
+    train = [py, STAGES["train"],
+             "--proj_dim", str(dim), "--hidden_dim", str(args.hidden_dim),
+             "--seed", str(seed), "--output_dir", art["emb_dir"],
+             "--raw_embeddings_dir", args.embeddings_dir,
+             "--trace_index", args.trace_index, *flags]
+    if tag:
+        train += ["--artifact_tag", tag]
+    app = [py, STAGES["app"],
+           "--embeddings_dir", art["emb_dir"], "--output_dir", art["app_dir"],
+           "--trace_index", args.trace_index]
+    evaluate = [py, STAGES["eval"],
+                "--embeddings_dir", art["app_dir"], "--lstm_model", art["lstm"],
+                "--label", run_label(dim, seed), "--trace_index", args.trace_index, *flags]
+    if args.sample_fraction is not None:
+        evaluate += ["--sample_fraction", str(args.sample_fraction)]
+    return [("train", train), ("app", app), ("eval", evaluate)]
+
+
+def run_label(dim: int, seed: int) -> str:
+    return f"SWEEP_D{dim}_S{seed}"
+
+
+def run_dimension(dim: int, args, env: dict, paths: SweepPaths, seed: int) -> dict:
+    """Recipe steps 1-3 for one (dimension, seed); returns the parsed metrics."""
+    proto = protocol_suffix(args.protocol, args.nback)
+    art = artifact_paths(dim, proto, artifact_tag(args.hidden_dim, seed))
+    commands = dict(build_commands(dim, args, seed))
+    stem = f"dim{dim}{proto}{artifact_tag(args.hidden_dim, seed)}"
+
+    if os.path.isdir(art["emb_dir"]) and os.listdir(art["emb_dir"]) and os.path.exists(art["lstm"]) and not args.force:
+        print(f"    [skip] {art['emb_dir']}/ and {art['lstm']} already exist")
+    else:
+        print(f"  [1/3] Joint projector + LSTM training (D={dim}, hidden {args.hidden_dim}, seed {seed})")
+        run_stage(commands["train"], paths.logs / f"{stem}_1_train.log", env)
+        if not os.path.exists(art["lstm"]):
+            raise RuntimeError(f"Trainer finished but {art['lstm']} is missing")
+
+    if os.path.isdir(art["app_dir"]) and os.listdir(art["app_dir"]) and not args.force:
+        print(f"    [skip] {art['app_dir']}/ already exists")
+    else:
+        print("  [2/3] App-description concatenation")
+        run_stage(commands["app"], paths.logs / f"{stem}_2_app.log", env)
+
+    print("  [3/3] Screen prediction evaluation")
+    log_path = run_stage(commands["eval"], paths.logs / f"{stem}_3_eval.log", env)
+    metrics = parse_eval_metrics(log_path.read_text(encoding="utf-8"), run_label(dim, seed))
+    metrics["seed"] = seed
+    metrics["completed_at"] = datetime.now().isoformat(timespec="seconds")
+    metrics["artifacts"] = art
+    return metrics
+
+
+def cleanup_artifacts(dim: int, args, seed: int) -> None:
+    """Remove the bulky intermediates of a non-recipe seed once recorded."""
     if seed == RECIPE_SEED:
         return
-    _, emb_dir, app_dir, lstm_path = artifact_paths(dim, suffix, seed)
-    for d in (emb_dir, app_dir):
-        if os.path.isdir(d):
-            shutil.rmtree(d)
-    if os.path.exists(lstm_path):
-        os.remove(lstm_path)
-    print(f"    [cleanup] removed {emb_dir}/, {app_dir}/, {lstm_path}")
+    art = artifact_paths(dim, protocol_suffix(args.protocol, args.nback), artifact_tag(args.hidden_dim, seed))
+    for key in ("emb_dir", "app_dir"):
+        if os.path.isdir(art[key]):
+            shutil.rmtree(art[key])
+    for key in ("lstm", "projector", "plot"):
+        if os.path.exists(art[key]):
+            os.remove(art[key])
+    print(f"    [cleanup] removed seed-{seed} intermediates for D={dim}")
 
 
 # =============================================================================
-# Outputs: summary table + curve figure
+# Aggregation and outputs
 # =============================================================================
-def paper_reference():
-    """Screen2Vec's best Table 3 row, imported from the evaluation script."""
+def paper_reference() -> dict | None:
+    """Screen2Vec's best Table 3 row, read from the evaluator so it has one home."""
     try:
-        mod = importlib.import_module("4_evaluate_screen_prediction")
-        return mod.PAPER_TABLE3["Screen2Vec-EUCLIDEAN-spatial"]
+        import importlib
+        return importlib.import_module("4_evaluate_screen_prediction").PAPER_TABLE3["Screen2Vec-EUCLIDEAN-spatial"]
     except Exception:
         return None
 
 
-def write_table(results):
-    runs = results["runs"]
-    ref = paper_reference()
-    header = f"{'dim':>10} " + " ".join(
-        f"{METRIC_LABELS[k]:>10}" for k in METRIC_KEYS
-    )
-    hidden = results.get("meta", {}).get("hidden_dim", RECIPE_HIDDEN_DIM)
-    recipe_note = (
-        "(README recipe, with app context)" if hidden == RECIPE_HIDDEN_DIM
-        else f"(DEVIATION from README recipe: projector hidden_dim={hidden}, "
-             f"recipe default {RECIPE_HIDDEN_DIM}; approved 2026-07-28)"
-    )
-    lines = [
-        "Embedding-dimension sweep — GUI Screen Prediction " + recipe_note,
-        "Final embedding per point = D screen dims + 768 app-description dims",
-        "=" * len(header),
-        header,
-        "-" * len(header),
-    ]
-    for key in sorted(runs, key=int):
-        m = runs[key]
-        lines.append(
-            f"{key:>10} " + " ".join(f"{m[k]:>10.4f}" for k in METRIC_KEYS)
-        )
-    if ref:
-        lines.append("-" * len(header))
-        lines.append(
-            f"{'S2V-spat.':>10} "
-            + " ".join(f"{ref[k]:>10.4f}" for k in METRIC_KEYS)
-            + "   (Screen2Vec-EUCLIDEAN-spatial, paper; 768+768 dims)"
-        )
-    lines.append("=" * len(header))
-    table = "\n".join(lines)
-    with open(TABLE_PATH, "w", encoding="utf-8") as f:
-        f.write(table + "\n")
-    return table
-
-
-def write_figure(results):
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    runs = results["runs"]
-    dims = sorted(int(k) for k in runs)
-    if not dims:
-        return
-
-    # Validated categorical palette (light mode), one hue per metric
-    series = [
-        ("top1", "#2a78d6"),      # blue
-        ("top001pct", "#1baf7a"),  # aqua
-        ("top01pct", "#eda100"),   # yellow
-        ("top1pct", "#008300"),    # green
-    ]
-    ink, ink2, grid = "#1a1a19", "#575551", "#d9d8d2"
-    ref = paper_reference()
-
-    fig, (ax, ax2) = plt.subplots(
-        1, 2, figsize=(12, 4.8), dpi=150,
-        gridspec_kw={"width_ratios": [2, 1]},
-    )
-    fig.patch.set_facecolor("white")
-
-    for a in (ax, ax2):
-        a.set_facecolor("white")
-        a.grid(True, color=grid, linewidth=0.8, alpha=0.6)
-        a.set_axisbelow(True)
-        for side in ("top", "right"):
-            a.spines[side].set_visible(False)
-        for side in ("left", "bottom"):
-            a.spines[side].set_color(ink2)
-        a.tick_params(colors=ink2, labelsize=9)
-        a.set_xscale("log", base=2)
-        a.set_xticks(dims)
-        a.set_xticklabels([str(d) for d in dims], rotation=0)
-        a.minorticks_off()
-        a.set_xlabel("Screen-embedding dimension (D of D+768)",
-                     color=ink, fontsize=10)
-
-    # --- Left panel: Top-k accuracies (higher is better) ---
-    for key, color in series:
-        ys = [runs[str(d)][key] for d in dims]
-        ax.plot(dims, ys, color=color, linewidth=2, marker="o",
-                markersize=5, label=METRIC_LABELS[key])
-        ax.annotate(METRIC_LABELS[key], (dims[-1], ys[-1]),
-                    xytext=(6, 0), textcoords="offset points",
-                    color=ink, fontsize=8.5, va="center")
-        if ref:
-            ax.axhline(ref[key], color=color, linewidth=1.2,
-                       linestyle=(0, (4, 3)), alpha=0.55)
-    ax.set_ylabel("Accuracy", color=ink, fontsize=10)
-    ax.set_ylim(0, 1.02)
-    title = "GUI screen prediction accuracy vs. screen-embedding dimension"
-    if ref:
-        title += "\n(dashed = Screen2Vec-spatial, paper)"
-    ax.set_title(title, color=ink, fontsize=10.5, loc="left")
-    ax.legend(frameon=False, fontsize=8.5, labelcolor=ink, loc="lower right")
-
-    # --- Right panel: Normalized RMSE (lower is better) ---
-    ys = [runs[str(d)]["nrmse"] for d in dims]
-    ax2.plot(dims, ys, color="#2a78d6", linewidth=2, marker="o",
-             markersize=5)
-    if ref:
-        ax2.axhline(ref["nrmse"], color="#2a78d6", linewidth=1.2,
-                    linestyle=(0, (4, 3)), alpha=0.55)
-    ax2.set_ylabel("Normalized RMSE  (lower is better)",
-                   color=ink, fontsize=10)
-    ax2.set_title("Prediction error", color=ink, fontsize=10.5, loc="left")
-
-    fig.tight_layout()
-    fig.savefig(FIGURE_PATH, bbox_inches="tight")
-    plt.close(fig)
-
-
-def refresh_outputs(results):
-    table = write_table(results)
-    write_figure(results)
-    print(f"\n{table}\n")
-    print(f"[*] Table:  {TABLE_PATH}")
-    print(f"[*] Figure: {FIGURE_PATH}")
-
-
-# =============================================================================
-# Multi-seed aggregation (runs[dim][seed] = metrics)
-# =============================================================================
-def seed_stats(results):
-    """Per-dim mean/std/n over seeds for every metric."""
-    import statistics
+def seed_stats(results: dict) -> dict:
+    """Per-dimension mean / std / n over seeds, for every metric."""
     stats = {}
     for dim_key, by_seed in results["runs"].items():
-        vals = {k: [m[k] for m in by_seed.values()] for k in METRIC_KEYS}
-        stats[dim_key] = {
-            k: {
-                "mean": statistics.mean(v),
-                "std": statistics.stdev(v) if len(v) > 1 else 0.0,
+        entry = {"n": len(by_seed)}
+        for key in METRIC_KEYS:
+            values = [m[key] for m in by_seed.values() if key in m and m[key] == m[key]]
+            entry[key] = {
+                "mean": statistics.mean(values) if values else float("nan"),
+                "std": statistics.stdev(values) if len(values) > 1 else 0.0,
             }
-            for k, v in vals.items()
-        }
-        stats[dim_key]["n"] = len(by_seed)
+        stats[dim_key] = entry
     return stats
 
 
-def write_seeds_table(results):
+def write_table(paths: SweepPaths, results: dict) -> str:
     stats = seed_stats(results)
     ref = paper_reference()
-    hidden = results.get("meta", {}).get("hidden_dim", RECIPE_HIDDEN_DIM)
-    col_w = 16
-    header = f"{'dim':>6} {'n':>3} " + " ".join(
-        f"{METRIC_LABELS[k]:>{col_w}}" for k in METRIC_KEYS
-    )
+    meta = results.get("meta", {})
+    multi = any(s["n"] > 1 for s in stats.values())
+    col = 15 if multi else 10
+    header = f"{'dim':>6} {'n':>3} " + " ".join(f"{METRIC_LABELS[k]:>{col}}" for k in METRIC_KEYS)
     lines = [
-        "Embedding-dimension sweep with seed repeats — "
-        "GUI Screen Prediction (mean ± std over seeds)",
-        f"Projector hidden_dim={hidden}"
-        + ("" if hidden == RECIPE_HIDDEN_DIM
-           else f" (DEVIATION from README recipe default "
-                f"{RECIPE_HIDDEN_DIM}; approved 2026-07-28)"),
+        "Embedding-dimension sweep - GUI Screen Prediction (joint recipe: 9_ -> 6_ -> 4_)",
+        f"protocol={meta.get('protocol', '?')}  hidden_dim={meta.get('hidden_dim', '?')}  "
+        f"raw={meta.get('raw_embeddings_dir', '?')}  seeds={meta.get('seeds', '?')}",
         "Final embedding per point = D screen dims + 768 app-description dims",
-        "=" * len(header),
-        header,
-        "-" * len(header),
+        "Top-1 and MRR are the informative columns; Top-0.1% and above are saturated by app identity,",
+        "and Norm.RMSE is not comparable to the paper's (FINDINGS.md 2-3).",
+        "=" * len(header), header, "-" * len(header),
     ]
-    for key in sorted(stats, key=int):
-        s = stats[key]
-        cells = " ".join(
-            f"{s[k]['mean']:.4f}±{s[k]['std']:.4f}".rjust(col_w)
-            for k in METRIC_KEYS
-        )
-        lines.append(f"{key:>6} {s['n']:>3} " + cells)
+    for dim_key in sorted(stats, key=int):
+        s = stats[dim_key]
+        if multi:
+            cells = " ".join(f"{s[k]['mean']:.4f}+-{s[k]['std']:.4f}".rjust(col) for k in METRIC_KEYS)
+        else:
+            cells = " ".join(f"{s[k]['mean']:>{col}.4f}" for k in METRIC_KEYS)
+        lines.append(f"{dim_key:>6} {s['n']:>3} {cells}")
     if ref:
         lines.append("-" * len(header))
-        lines.append(
-            f"{'S2V':>6} {'':>3} "
-            + " ".join(f"{ref[k]:.4f}".rjust(col_w) for k in METRIC_KEYS)
-            + "  (Screen2Vec-EUCLIDEAN-spatial, paper)"
-        )
+        cells = " ".join((f"{ref[k]:.4f}" if k in ref else "n/a").rjust(col) for k in METRIC_KEYS)
+        lines.append(f"{'S2V':>6} {'':>3} {cells}   (Screen2Vec-EUCLIDEAN-spatial, paper; 768+768 dims)")
     lines.append("=" * len(header))
     table = "\n".join(lines)
-    with open(TABLE_PATH, "w", encoding="utf-8") as f:
-        f.write(table + "\n")
+    paths.table.write_text(table + "\n", encoding="utf-8")
     return table
 
 
-def write_seeds_figure(results):
+def write_csv(paths: SweepPaths, results: dict) -> None:
+    """One row per (dimension, seed): flat, for the result notebooks."""
+    import csv
+    rows = []
+    for dim_key, by_seed in results["runs"].items():
+        for seed_key, m in by_seed.items():
+            row = {"proj_dim": int(dim_key), "seed": int(seed_key)}
+            row.update({k: m.get(k) for k in METRIC_KEYS})
+            row.update({k: m.get(k) for k in POPULATION_KEYS})
+            row["completed_at"] = m.get("completed_at")
+            rows.append(row)
+    rows.sort(key=lambda r: (r["proj_dim"], r["seed"]))
+    with open(paths.csv, "w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=list(rows[0].keys()) if rows else ["proj_dim", "seed"])
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def write_figure(paths: SweepPaths, results: dict) -> None:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -449,238 +398,183 @@ def write_seeds_figure(results):
     dims = sorted(int(k) for k in stats)
     if not dims:
         return
-
-    series = [
-        ("top1", "#2a78d6"),
-        ("top001pct", "#1baf7a"),
-        ("top01pct", "#eda100"),
-        ("top1pct", "#008300"),
-    ]
-    ink, ink2, grid = "#1a1a19", "#575551", "#d9d8d2"
     ref = paper_reference()
+    meta = results.get("meta", {})
+    n_values = [stats[str(d)]["n"] for d in dims]
+    n_text = f"n={min(n_values)}" if min(n_values) == max(n_values) else f"n={min(n_values)}-{max(n_values)}"
 
-    fig, (ax, ax2) = plt.subplots(
-        1, 2, figsize=(12, 4.8), dpi=150,
-        gridspec_kw={"width_ratios": [2, 1]},
-    )
-    fig.patch.set_facecolor("white")
-    for a in (ax, ax2):
-        a.set_facecolor("white")
-        a.grid(True, color=grid, linewidth=0.8, alpha=0.6)
-        a.set_axisbelow(True)
+    fig, (ax_main, ax_sat) = plt.subplots(1, 2, figsize=(11, 4.4), dpi=150, gridspec_kw={"width_ratios": [1.15, 1]})
+    for ax in (ax_main, ax_sat):
+        ax.grid(True, alpha=0.3)
+        ax.set_axisbelow(True)
+        ax.set_xscale("log", base=2)
+        ax.set_xticks(dims)
+        ax.set_xticklabels([str(d) for d in dims])
+        ax.minorticks_off()
+        ax.set_xlabel("Screen-embedding dimension D (of D + 768)")
         for side in ("top", "right"):
-            a.spines[side].set_visible(False)
-        for side in ("left", "bottom"):
-            a.spines[side].set_color(ink2)
-        a.tick_params(colors=ink2, labelsize=9)
-        a.set_xscale("log", base=2)
-        a.set_xticks(dims)
-        a.set_xticklabels([str(d) for d in dims])
-        a.minorticks_off()
-        a.set_xlabel("Screen-embedding dimension (D of D+768)",
-                     color=ink, fontsize=10)
+            ax.spines[side].set_visible(False)
 
-    n_min = min(stats[str(d)]["n"] for d in dims)
-    n_max = max(stats[str(d)]["n"] for d in dims)
-    n_txt = f"n={n_min}" if n_min == n_max else f"n={n_min}–{n_max}"
-
-    for key, color in series:
+    def curve(ax, key, color, label):
         ys = [stats[str(d)][key]["mean"] for d in dims]
         es = [stats[str(d)][key]["std"] for d in dims]
-        ax.errorbar(dims, ys, yerr=es, color=color, linewidth=2,
-                    marker="o", markersize=4, capsize=3,
-                    label=METRIC_LABELS[key])
-        if ref:
-            ax.axhline(ref[key], color=color, linewidth=1.2,
-                       linestyle=(0, (4, 3)), alpha=0.55)
-    ax.set_ylabel("Accuracy", color=ink, fontsize=10)
-    ax.set_ylim(0, 1.02)
-    ax.set_title(
-        f"GUI screen prediction accuracy vs. dimension "
-        f"(mean ± std, {n_txt} seeds)\n(dashed = Screen2Vec-spatial, paper)",
-        color=ink, fontsize=10.5, loc="left")
-    ax.legend(frameon=False, fontsize=8.5, labelcolor=ink, loc="lower right")
+        ax.errorbar(dims, ys, yerr=es if max(n_values) > 1 else None, color=color,
+                    linewidth=2, marker="o", markersize=4, capsize=3, label=label)
+        if ref and key in ref:
+            ax.axhline(ref[key], color=color, linewidth=1.2, linestyle=(0, (4, 3)), alpha=0.6)
 
-    ys = [stats[str(d)]["nrmse"]["mean"] for d in dims]
-    es = [stats[str(d)]["nrmse"]["std"] for d in dims]
-    ax2.errorbar(dims, ys, yerr=es, color="#2a78d6", linewidth=2,
-                 marker="o", markersize=4, capsize=3)
-    if ref:
-        ax2.axhline(ref["nrmse"], color="#2a78d6", linewidth=1.2,
-                    linestyle=(0, (4, 3)), alpha=0.55)
-    ax2.set_ylabel("Normalized RMSE  (lower is better)",
-                   color=ink, fontsize=10)
-    ax2.set_title("Prediction error", color=ink, fontsize=10.5, loc="left")
+    curve(ax_main, "top1", "#2a78d6", "Top-1")
+    curve(ax_main, "mrr", "#d1495b", "MRR (no paper value)")
+    ax_main.set_ylim(0, None)
+    ax_main.set_ylabel("Retrieval quality")
+    ax_main.set_title(f"Informative metrics (dashed = Screen2Vec-spatial, paper; {n_text} seeds)", loc="left", fontsize=10)
+    ax_main.legend(frameon=False, fontsize=9, loc="lower right")
 
+    curve(ax_sat, "top001pct", "#1baf7a", "Top-0.01%")
+    curve(ax_sat, "top01pct", "#eda100", "Top-0.1%")
+    curve(ax_sat, "top1pct", "#008300", "Top-1%")
+    ax_sat.set_ylim(0, 1.02)
+    ax_sat.set_ylabel("Accuracy")
+    ax_sat.set_title("Top-k% columns (saturated by app identity from Top-0.1%)", loc="left", fontsize=10)
+    ax_sat.legend(frameon=False, fontsize=9, loc="lower right")
+
+    fig.suptitle(f"GUI screen prediction vs. embedding dimension - protocol {meta.get('protocol', '?')}, "
+                 f"hidden {meta.get('hidden_dim', '?')}", fontsize=10.5, x=0.01, ha="left")
     fig.tight_layout()
-    fig.savefig(FIGURE_PATH, bbox_inches="tight")
+    fig.savefig(paths.figure, bbox_inches="tight")
     plt.close(fig)
 
 
-def refresh_seeds_outputs(results):
-    table = write_seeds_table(results)
-    write_seeds_figure(results)
+def refresh_outputs(paths: SweepPaths, results: dict) -> None:
+    table = write_table(paths, results)
+    write_csv(paths, results)
+    write_figure(paths, results)
     print(f"\n{table}\n")
-    print(f"[*] Table:  {TABLE_PATH}")
-    print(f"[*] Figure: {FIGURE_PATH}")
+    print(f"[*] Table : {paths.table}\n[*] CSV   : {paths.csv}\n[*] Figure: {paths.figure}")
 
 
 # =============================================================================
 # CLI
 # =============================================================================
-def main():
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Sweep projection dimensions through the README's "
-                    "Table 3 replication recipe and visualize the results."
+        description="Sweep the projection dimension through the joint Table 3 recipe and plot the curve."
     )
     sub = parser.add_subparsers(dest="mode", required=True)
 
-    run_p = sub.add_parser("run", help="Run the sweep (resumable)")
-    run_p.add_argument("--dims", type=str,
-                       default=",".join(str(d) for d in DEFAULT_DIMS),
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--protocol", choices=("permissive", "strict", "nback"), default="permissive",
+                        help="Evaluation protocol, passed to BOTH the trainer and the evaluator "
+                             "(default: permissive, the README recipe). See 4_evaluate_screen_prediction.py.")
+    common.add_argument("--nback", type=int, default=None, metavar="K",
+                        help="Context length for --protocol nback")
+    common.add_argument("--hidden_dim", type=int, default=RECIPE_HIDDEN_DIM,
+                        help=f"Projector hidden width (recipe default {RECIPE_HIDDEN_DIM}); must be >= every "
+                             "swept dimension, otherwise the output is rank-limited. Non-default widths "
+                             "write _h<H>-suffixed artefacts and results.")
+
+    run_p = sub.add_parser("run", parents=[common], help="Run the sweep (resumable)")
+    run_p.add_argument("--dims", type=str, default=",".join(str(d) for d in DEFAULT_DIMS),
                        help="Comma-separated projection dimensions")
-    run_p.add_argument("--gpu", type=str, default=None,
-                       help="CUDA device id for the training stages")
-    run_p.add_argument("--force", action="store_true",
-                       help="Re-run dimensions already in results.json")
-    run_p.add_argument("--sample_fraction", type=float, default=None,
-                       help="NON-RECIPE, quick tests only: evaluate on a "
-                            "fraction of traces")
-    run_p.add_argument("--embeddings_dir", type=str,
-                       default="embeddings_4096_last",
-                       help="Directory with the raw pooled Qwen embeddings "
-                            "(1_qwen_generate_embeddings.py naming: "
-                            "embeddings_<shape>_<pooling>)")
-    run_p.add_argument("--hidden_dim", type=int, default=RECIPE_HIDDEN_DIM,
-                       help="Projector hidden width (recipe default "
-                            f"{RECIPE_HIDDEN_DIM}; non-default values are a "
-                            "recipe deviation and write _h<H>-suffixed "
-                            "artifacts/results)")
     run_p.add_argument("--seeds", type=str, default=str(RECIPE_SEED),
-                       help="Comma-separated seeds. More than one seed "
-                            "switches to the _seeds results (mean ± std)")
+                       help="Comma-separated seeds; more than one gives mean +- std and error bars")
+    run_p.add_argument("--gpu", type=str, default=None, help="CUDA_VISIBLE_DEVICES for the stages")
+    run_p.add_argument("--embeddings_dir", type=str, default=RAW_EMBEDDINGS_DIR,
+                       help=f"Raw pooled Qwen embeddings (default: {RAW_EMBEDDINGS_DIR})")
+    run_p.add_argument("--trace_index", type=str, default=trace_index.DEFAULT_INDEX_PATH,
+                       help="Trace->layout index from 0_build_trace_index.py (required by every stage)")
+    run_p.add_argument("--sample_fraction", type=float, default=None,
+                       help="NON-RECIPE, plumbing tests only: evaluate on a fraction of traces")
+    run_p.add_argument("--force", action="store_true", help="Re-run (dimension, seed) pairs already recorded")
     run_p.add_argument("--keep_artifacts", action="store_true",
-                       help="Keep non-42-seed intermediate dirs/checkpoints "
-                            "instead of deleting them after metrics are "
-                            "recorded")
+                       help="Keep non-42-seed intermediates instead of deleting them after recording")
+    run_p.add_argument("--dry_run", action="store_true", help="Print the stage commands and exit")
 
-    plot_p = sub.add_parser(
-        "plot", help="Regenerate table + figure from results.json")
-    plot_p.add_argument("--hidden_dim", type=int, default=RECIPE_HIDDEN_DIM,
-                        help="Which sweep's results to plot")
-    plot_p.add_argument("--seeds", action="store_true",
-                        help="Plot the multi-seed (mean ± std) results")
+    sub.add_parser("plot", parents=[common], help="Regenerate table, CSV and figure from the results file")
+    return parser
 
-    args = parser.parse_args()
-    suffix = apply_hidden_suffix(args.hidden_dim)
+
+def validate(args, parser) -> None:
+    if args.protocol == "nback" and (args.nback is None or args.nback < 1):
+        parser.error("--protocol nback requires --nback K with K >= 1")
+    if args.protocol != "nback" and args.nback is not None:
+        parser.error("--nback only applies to --protocol nback")
+
+
+def main(argv=None) -> None:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    validate(args, parser)
+    paths = SweepPaths(args.protocol, args.nback, args.hidden_dim)
 
     if args.mode == "plot":
-        if args.seeds:
-            apply_seeds_paths()
-            results = load_results()
-            if not results["runs"]:
-                print("No seed-repeat results yet — run with --seeds first.")
-                return
-            refresh_seeds_outputs(results)
-        else:
-            results = load_results()
-            if not results["runs"]:
-                print("No results yet — run the sweep first.")
-                return
-            refresh_outputs(results)
+        results = load_results(paths)
+        if not results["runs"]:
+            print(f"No results in {paths.results}; run the sweep first.")
+            return
+        refresh_outputs(paths, results)
         return
 
+    dims = [int(d) for d in args.dims.split(",") if d.strip()]
     seeds = [int(s) for s in args.seeds.split(",") if s.strip()]
-    multi_seed = len(seeds) > 1 or seeds != [RECIPE_SEED]
-    single_results_path = RESULTS_PATH
-    if multi_seed:
-        apply_seeds_paths()
-    results = load_results()
+    if max(dims) > args.hidden_dim:
+        parser.error(f"proj_dim {max(dims)} > hidden_dim {args.hidden_dim}: the projector output would be "
+                     f"rank-limited by its hidden layer; use --hidden_dim >= {max(dims)}")
+    jobs = [(dim, seed) for dim in dims for seed in seeds]
+
+    if args.dry_run:
+        print(f"[dry run] protocol={args.protocol} hidden_dim={args.hidden_dim} -> {paths.results}")
+        for dim, seed in jobs:
+            print(f"\n# D={dim} seed={seed}")
+            for _, cmd in build_commands(dim, args, seed):
+                print("  " + " ".join(cmd))
+        return
+
+    if not Path(args.trace_index).exists():
+        raise SystemExit(f"{args.trace_index} missing; run 0_build_trace_index.py first (every stage needs it)")
+    for script in STAGES.values():
+        if not Path(script).exists():
+            raise SystemExit(f"{script} not found; run from the repository root")
 
     env = os.environ.copy()
-    env["PYTHONUNBUFFERED"] = "1"  # stage logs stream live (tail -f works)
+    env["PYTHONUNBUFFERED"] = "1"
     if args.gpu is not None:
         env["CUDA_VISIBLE_DEVICES"] = args.gpu
 
-    if args.hidden_dim == RECIPE_HIDDEN_DIM:
-        recipe_desc = ("README 'Replicating & Beating Screen2Vec Table 3' "
-                       "(script defaults: hidden_dim=1024, seed=42, full app "
-                       "descriptions), only --proj_dim varied")
-    else:
-        recipe_desc = ("README Table 3 recipe with DEVIATION: projector "
-                       f"hidden_dim={args.hidden_dim} (recipe default "
-                       f"{RECIPE_HIDDEN_DIM}); needed for proj_dim > 1024, "
-                       "applied uniformly; approved 2026-07-28")
+    results = load_results(paths)
     results["meta"] = {
-        "recipe": recipe_desc,
+        "recipe": "9_train_joint.py -> 6_generate_app_context_embeddings.py -> 4_evaluate_screen_prediction.py",
+        "protocol": args.protocol if args.protocol != "nback" else f"nback{args.nback}",
         "hidden_dim": args.hidden_dim,
+        "raw_embeddings_dir": args.embeddings_dir,
+        "trace_index": args.trace_index,
+        "trace_index_meta": trace_index_meta(args.trace_index),
+        "seeds": sorted({*seeds, *(int(s) for by in results["runs"].values() for s in by)}),
+        "git_revision": git_revision(),
+        "sample_fraction": args.sample_fraction,
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
     }
-    if multi_seed:
-        results["meta"]["seeds"] = sorted(
-            set(seeds)
-            | {int(s) for by in results["runs"].values() for s in by}
-        )
-    todo = [int(d) for d in args.dims.split(",") if d.strip()]
-    if max(todo) > args.hidden_dim:
-        raise SystemExit(
-            f"[!] proj_dim {max(todo)} > hidden_dim {args.hidden_dim}: the "
-            f"output would be rank-limited by the hidden layer. Use "
-            f"--hidden_dim >= {max(todo)}."
-        )
-
-    print(f"[*] Sweep plan: dims {todo} x seeds {seeds}  "
-          f"(gpu={args.gpu or 'default'}, hidden_dim={args.hidden_dim})")
+    print(f"[*] Sweep plan: dims {dims} x seeds {seeds}  (protocol={results['meta']['protocol']}, "
+          f"hidden_dim={args.hidden_dim}, gpu={args.gpu or 'default'})")
     if args.sample_fraction is not None:
-        print(f"[!] sample_fraction={args.sample_fraction} — NOT the recipe; "
-              f"results from this run are for plumbing tests only.")
+        print(f"[!] sample_fraction={args.sample_fraction}: NOT the recipe, plumbing tests only")
 
-    # Seed-42 metrics can be imported from the single-seed results file.
-    single_runs = {}
-    if multi_seed and os.path.exists(single_results_path):
-        with open(single_results_path, "r", encoding="utf-8") as f:
-            single_runs = json.load(f).get("runs", {})
-
-    jobs = [(dim, seed) for dim in todo for seed in seeds]
     for i, (dim, seed) in enumerate(jobs, 1):
-        key = str(dim)
-        tag = f"dim={dim} seed={seed}" if multi_seed else f"dim={dim}"
-
-        if multi_seed:
-            done = key in results["runs"] and str(seed) in results["runs"][key]
-        else:
-            done = key in results["runs"]
-        if done and not args.force:
-            print(f"\n[{i}/{len(jobs)}] {tag}: already done, skipping "
-                  f"(--force to redo)")
+        key, seed_key = str(dim), str(seed)
+        if key in results["runs"] and seed_key in results["runs"][key] and not args.force:
+            print(f"\n[{i}/{len(jobs)}] D={dim} seed={seed}: already recorded, skipping (--force to redo)")
             continue
-
-        if (multi_seed and seed == RECIPE_SEED and key in single_runs
-                and not args.force):
-            print(f"\n[{i}/{len(jobs)}] {tag}: imported from "
-                  f"{single_results_path}")
-            metrics = dict(single_runs[key], seed=RECIPE_SEED)
-        else:
-            print(f"\n[{i}/{len(jobs)}] {tag}  "
-                  f"({datetime.now().strftime('%H:%M:%S')})")
-            try:
-                metrics = run_dimension(dim, args, env, suffix, seed)
-            except RuntimeError as e:
-                print(f"  [-] FAILED: {e}")
-                print("      Fix the issue and re-run — completed runs "
-                      "are kept.")
-                continue
-            if multi_seed and not args.keep_artifacts:
-                cleanup_seed_artifacts(dim, suffix, seed)
-
-        if multi_seed:
-            results["runs"].setdefault(key, {})[str(seed)] = metrics
-        else:
-            results["runs"][key] = metrics
-        save_results(results)
-        if multi_seed:
-            refresh_seeds_outputs(results)
-        else:
-            refresh_outputs(results)
+        print(f"\n[{i}/{len(jobs)}] D={dim} seed={seed}  ({datetime.now().strftime('%H:%M:%S')})")
+        try:
+            metrics = run_dimension(dim, args, env, paths, seed)
+        except RuntimeError as exc:
+            print(f"  [-] FAILED: {exc}\n      Fix the issue and re-run; completed runs are kept.")
+            continue
+        if not args.keep_artifacts:
+            cleanup_artifacts(dim, args, seed)
+        results["runs"].setdefault(key, {})[seed_key] = metrics
+        save_results(paths, results)
+        refresh_outputs(paths, results)
 
     print("\n[*] Sweep finished.")
 

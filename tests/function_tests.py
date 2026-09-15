@@ -212,3 +212,190 @@ class TestHpc6RecoveryLauncher(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestScreenObservability(unittest.TestCase):
+    """Whitelist / blacklist scoring in screen_observability.py."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.so = importlib.import_module("screen_observability")
+
+    @staticmethod
+    def _screen(*components):
+        return list(components)
+
+    def test_family_matching(self):
+        fam = self.so.family_of
+        self.assertEqual(fam("android.webkit.WebView"), "webview")
+        self.assertEqual(fam("org.apache.cordova.engine.SystemWebView"), "webview")
+        self.assertEqual(fam("org.xwalk.core.internal.XWalkViewBridge"), "webview")
+        self.assertEqual(fam("com.google.android.gms.ads.AdView"), "ad")
+        self.assertEqual(fam("com.google.android.gms.ads.internal.webview.o"), "ad")
+        self.assertEqual(fam("com.mopub.mobileads.MoPubView"), "ad")
+        self.assertEqual(fam("com.google.maps.api.android.lib6.impl.am"), "map")
+        self.assertEqual(fam("maps.ad.J"), "map")
+        self.assertEqual(fam("com.unity3d.player.UnityPlayer"), "engine")
+        self.assertEqual(fam("com.adobe.air.AIRWindowSurfaceView"), "engine")
+        self.assertEqual(fam("android.view.SurfaceView"), "surface")
+        self.assertEqual(fam("android.widget.VideoView"), "surface")
+        self.assertEqual(fam("com.google.android.youtube.player.YouTubePlayerView"), "surface")
+        # Suffixes match CamelCase tokens, not raw characters.
+        self.assertEqual(fam("com.pandora.android.activity.NowPlayingAdView"), "ad")
+        self.assertEqual(fam("lam.justbecause.tripcheckerfree.OTCMapView"), "map")
+        self.assertEqual(fam("com.mopub.mraid.MraidBridge$MraidWebView"), "ad")
+        self.assertEqual(fam("com.carezone.careapp.ui.view.TextureVideoView"), "surface")
+        self.assertEqual(self.so.camel_tokens("GLSurfaceView"), ("gl", "surface", "view"))
+        # Native views, Chrome's own toolbar and look-alike names must not be opaque.
+        for cls in ("android.widget.TextView", "android.widget.Button",
+                    "com.facebook.react.views.view.ReactViewGroup",
+                    "org.chromium.chrome.browser.omnibox.UrlBar",
+                    "ti.modules.titanium.ui.widget.TiUILabel$1",
+                    "de.smartchord.droid.tuner.GuitarHeadView",
+                    "com.kdanmobile.pdfreader.widget.ReadView.ReadView",
+                    "com.modiface.widgets.BitmapView",
+                    "com.google.android.apps.zagat.views.LoadView", None, ""):
+            self.assertIsNone(fam(cls), cls)
+
+    def test_full_frame_webview_is_fully_covered(self):
+        row = self.so.analyse_components(self._screen(
+            {"class": "android.webkit.WebView", "bounds": [1, 1, 100, 100]}))
+        self.assertAlmostEqual(row["opaque_coverage"], 1.0)
+        self.assertAlmostEqual(row["cov_webview"], 1.0)
+        self.assertEqual(row["opaque_subtree_count"], 1)
+        self.assertEqual(row["largest_opaque_class"], "android.webkit.WebView")
+
+    def test_half_frame_webview(self):
+        row = self.so.analyse_components(self._screen(
+            {"class": "android.webkit.WebView", "bounds": [1, 1, 100, 50]},
+            {"class": "android.widget.TextView", "text": "hello", "bounds": [1, 51, 100, 100]}))
+        self.assertAlmostEqual(row["opaque_coverage"], 99 * 49 / (99 * 99))
+        self.assertEqual(row["text_component_count"], 1)
+        self.assertEqual(row["clean_component_count"], 2)
+
+    def test_overlapping_opaque_boxes_are_a_union_not_a_sum(self):
+        row = self.so.analyse_components(self._screen(
+            {"class": "android.webkit.WebView", "bounds": [1, 1, 100, 100]},
+            {"class": "android.view.SurfaceView", "bounds": [1, 1, 100, 100]}))
+        self.assertAlmostEqual(row["opaque_coverage"], 1.0)
+        self.assertAlmostEqual(row["cov_webview"], 1.0)
+        self.assertAlmostEqual(row["cov_surface"], 1.0)
+
+    def test_webview_with_exposed_text_is_not_opaque(self):
+        row = self.so.analyse_components(self._screen(
+            {"class": "android.webkit.WebView", "bounds": [1, 1, 100, 100],
+             "children": [{"class": "android.view.View", "text": "Sign in", "bounds": [10, 10, 50, 20]}]}))
+        self.assertEqual(row["opaque_coverage"], 0.0)
+        self.assertEqual(row["opaque_exempt_count"], 1)
+        self.assertEqual(row["clean_component_count"], 2)
+
+    def test_ad_with_unlabelled_wrappers_is_opaque(self):
+        row = self.so.analyse_components(self._screen(
+            {"class": "com.google.android.gms.ads.AdView", "bounds": [1, 87, 100, 93],
+             "children": [{"class": "com.google.android.gms.ads.internal.bp", "bounds": [1, 87, 100, 93],
+                           "children": [{"class": "in", "bounds": [1, 87, 100, 93]}]}]}))
+        self.assertAlmostEqual(row["cov_ad"], 99 * 6 / (99 * 99))
+        self.assertEqual(row["opaque_subtree_count"], 1)
+        self.assertEqual(row["clean_component_count"], 3)   # wrappers still count as components
+
+    def test_assign_lists_threshold_and_empty(self):
+        import pandas as pd
+        frame = pd.DataFrame({
+            "clean_component_count": [0, 5, 5, 5],
+            "opaque_coverage": [0.0, 0.0, 0.49, 0.5],
+        })
+        out = self.so.assign_lists(frame, threshold=0.5)
+        self.assertEqual(out["list"].tolist(), ["blacklist", "whitelist", "whitelist", "blacklist"])
+        self.assertEqual(out["reason"].tolist(), ["empty", "", "", "opaque"])
+
+    def test_example_screens(self):
+        row0 = self.so.scan_screen("data/rico-examples/0.json")   # Cordova PWA: one WebView
+        self.assertEqual(row0["app"], "com.brc.PeriodTrackerDiary")
+        self.assertGreater(row0["opaque_coverage"], 0.9)
+        self.assertEqual(row0["largest_opaque_class"], "org.apache.cordova.engine.SystemWebView")
+        row2 = self.so.scan_screen("data/rico-examples/2.json")   # native settings screen
+        self.assertEqual(row2["opaque_coverage"], 0.0)
+        self.assertGreater(row2["text_component_count"], 0)
+
+    def test_run_scan_on_examples(self):
+        frame, meta = self.so.run_scan(layouts_dir="data/rico-examples", workers=2)
+        self.assertEqual(frame.loc[0, "list"], "blacklist")
+        self.assertEqual(frame.loc[0, "reason"], "opaque")
+        self.assertEqual(frame.loc[2, "list"], "whitelist")
+        self.assertNotIn("_class_counter", frame.columns)
+        self.assertEqual(meta["screens"], len(frame))
+        self.assertEqual(meta["threshold"], 0.5)
+
+
+class TestDimensionSweep(unittest.TestCase):
+    """Naming, log parsing and output writing of 4_sweep_embedding_dimensions.py."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.sweep = importlib.import_module("4_sweep_embedding_dimensions")
+
+    def test_recipe_point_keeps_canonical_names(self):
+        art = self.sweep.artifact_paths(768, "", self.sweep.artifact_tag(1024, 42))
+        self.assertEqual(art["emb_dir"], "embeddings_seq_768")
+        self.assertEqual(art["app_dir"], "embeddings_seq_768_with_app")
+        self.assertEqual(art["lstm"], "lstm_predictor_768d.pth")
+        self.assertEqual(art["projector"], "sequence_projector_768d.pth")
+
+    def test_protocol_hidden_and_seed_suffixes(self):
+        proto = self.sweep.protocol_suffix("strict", None)
+        art = self.sweep.artifact_paths(128, proto, self.sweep.artifact_tag(4096, 43))
+        self.assertEqual(art["emb_dir"], "embeddings_seq_128_strict_h4096_s43")
+        self.assertEqual(art["lstm"], "lstm_predictor_128d_strict_h4096_s43.pth")
+        self.assertEqual(self.sweep.protocol_suffix("nback", 2), "_nback2")
+        self.assertEqual(self.sweep.protocol_flags("nback", 2), ["--nback", "2"])
+        self.assertEqual(self.sweep.protocol_flags("permissive", None), [])
+
+    def test_commands_pass_protocol_to_trainer_and_evaluator(self):
+        parser = self.sweep.build_parser()
+        args = parser.parse_args(["run", "--protocol", "strict", "--dims", "64", "--seeds", "43"])
+        commands = dict(self.sweep.build_commands(64, args, 43))
+        self.assertIn("--strict", commands["train"])
+        self.assertIn("--strict", commands["eval"])
+        self.assertIn("--artifact_tag", commands["train"])
+        self.assertEqual(commands["train"][commands["train"].index("--artifact_tag") + 1], "_s43")
+        self.assertIn("lstm_predictor_64d_strict_s43.pth", commands["eval"])
+        self.assertNotIn("--strict", commands["app"])
+
+    def test_parse_eval_metrics(self):
+        text = (
+            "Model  Top-1  Top-0.01%  Top-0.1%  Top-1%  Top-5%  Norm.RMSE\n"
+            "SWEEP_D64_S42        0.1182     0.5004     0.9917   1.0000   1.0000     0.6028\n"
+            "Screen2Vec-EUCLIDEAN-spatial   0.0610 0.2580 0.9690 0.9980 1.0000 0.8530\n"
+            "  Supplementary (not in Table 3): MRR 0.2345\n"
+            "  Eligible traces evaluated: 5104 (41553 screens, 34140 prediction instances)\n"
+        )
+        m = self.sweep.parse_eval_metrics(text, "SWEEP_D64_S42")
+        self.assertAlmostEqual(m["top1"], 0.1182)
+        self.assertAlmostEqual(m["nrmse"], 0.6028)
+        self.assertAlmostEqual(m["mrr"], 0.2345)
+        self.assertEqual(m["n_traces"], 5104)
+        self.assertEqual(m["n_instances"], 34140)
+        with self.assertRaises(RuntimeError):
+            self.sweep.parse_eval_metrics(text, "SWEEP_D32_S42")
+
+    def test_outputs_from_synthetic_results(self):
+        with tempfile.TemporaryDirectory() as directory:
+            paths = self.sweep.SweepPaths("permissive", None, 1024, sweep_dir=Path(directory))
+            base = {"top001pct": 0.5, "top01pct": 0.99, "top1pct": 1.0, "top5pct": 1.0,
+                    "nrmse": 0.6, "n_traces": 10, "n_screens_in_traces": 50, "n_instances": 30,
+                    "completed_at": "now"}
+            results = {"meta": {"protocol": "permissive", "hidden_dim": 1024, "seeds": [42, 43]},
+                       "runs": {"64": {"42": dict(base, top1=0.10, mrr=0.20, seed=42),
+                                       "43": dict(base, top1=0.12, mrr=0.22, seed=43)},
+                                "768": {"42": dict(base, top1=0.15, mrr=0.30, seed=42)}}}
+            self.sweep.save_results(paths, results)
+            self.assertEqual(self.sweep.load_results(paths)["runs"]["768"]["42"]["top1"], 0.15)
+            stats = self.sweep.seed_stats(results)
+            self.assertAlmostEqual(stats["64"]["top1"]["mean"], 0.11)
+            self.assertEqual(stats["768"]["n"], 1)
+            table = self.sweep.write_table(paths, results)
+            self.assertIn("0.1100+-", table)
+            self.sweep.write_csv(paths, results)
+            self.sweep.write_figure(paths, results)
+            self.assertTrue(paths.figure.exists())
+            self.assertEqual(len(paths.csv.read_text(encoding="utf-8").strip().splitlines()), 4)

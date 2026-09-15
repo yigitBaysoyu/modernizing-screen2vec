@@ -72,3 +72,6 @@ median_class_accuracy.pdf
 /sample_papers
 /tmp
 /graphics
+
+# dimension sweep: per-stage subprocess logs (results.json / table / figure stay tracked)
+/dimension_sweep/logs
