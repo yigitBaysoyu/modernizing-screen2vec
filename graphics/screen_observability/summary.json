@@ -1,0 +1,186 @@
+{
+  "threshold": 0.5,
+  "screens": 66261,
+  "whitelist": 55220,
+  "blacklist": 11041,
+  "blacklist_empty": 169,
+  "blacklist_opaque": 10872,
+  "screens_with_any_opaque_coverage": 22943,
+  "apps": 9291,
+  "apps_fully_blacklisted": 1030,
+  "apps_partly_blacklisted": 3606,
+  "scan_meta": {
+    "schema_version": 1,
+    "generated_utc": "2026-09-09T22:25:11+00:00",
+    "layouts_dir": "../rico-data/data/layouts",
+    "screens": 66261,
+    "threshold": 0.5,
+    "whitelist": 55220,
+    "blacklist": 11041,
+    "blacklist_empty": 169,
+    "blacklist_opaque": 10872,
+    "min_class_screens": 5,
+    "distinct_classes_in_corpus": 28047,
+    "rare_classes_in_corpus": 21370,
+    "opaque_families": {
+      "ad": {
+        "substrings": [
+          "gms.ads",
+          "com.google.ads",
+          ".ads.",
+          ".advert",
+          "advertising",
+          "com.mopub",
+          "mraid",
+          "inmobi",
+          "millennialmedia",
+          "chartboost",
+          "applovin",
+          "amazon.device.ads",
+          "smaato",
+          "startapp",
+          "vungle",
+          "adcolony",
+          "tapjoy",
+          "ironsource",
+          "appnext",
+          "airpush",
+          "leadbolt",
+          "appodeal",
+          "admarvel",
+          "vervewireless",
+          "freewheel"
+        ],
+        "suffixes": [
+          [
+            "ad",
+            "view"
+          ],
+          [
+            "ad",
+            "layout"
+          ],
+          [
+            "admob",
+            "view"
+          ],
+          [
+            "ad",
+            "container"
+          ]
+        ]
+      },
+      "map": {
+        "substrings": [
+          "gms.maps",
+          "google.maps",
+          "maps.api.android",
+          "android.maps",
+          "apps.gmm.map",
+          "here.mapcanvas",
+          "nokia.maps",
+          "mapbox",
+          "osmdroid",
+          "osmand"
+        ],
+        "prefixes": [
+          "maps."
+        ],
+        "suffixes": [
+          [
+            "map",
+            "view"
+          ],
+          [
+            "map",
+            "canvas",
+            "view"
+          ]
+        ]
+      },
+      "engine": {
+        "substrings": [
+          "unity3d.player",
+          "cocos2dx",
+          "io.flutter",
+          "badlogic.gdx",
+          "libsdl",
+          "adobe.air",
+          "adobe.flashruntime",
+          "qtproject",
+          "ansca.corona",
+          "andengine",
+          "godot",
+          "epicgames",
+          "yoyogames",
+          "unreal",
+          "org.love2d",
+          "org.renpy",
+          "marmalade",
+          "gameclosure",
+          "com.defold"
+        ],
+        "suffixes": []
+      },
+      "webview": {
+        "substrings": [
+          "webview",
+          "xwalk",
+          "cordova.engine",
+          "crosswalk",
+          "tencent.smtt"
+        ],
+        "suffixes": [
+          [
+            "web",
+            "view"
+          ]
+        ]
+      },
+      "surface": {
+        "substrings": [
+          "youtube.player",
+          "org.mozilla.gecko.gfx"
+        ],
+        "suffixes": [
+          [
+            "surface",
+            "view"
+          ],
+          [
+            "texture",
+            "view"
+          ],
+          [
+            "video",
+            "view"
+          ],
+          [
+            "gl",
+            "root",
+            "view"
+          ],
+          [
+            "gl",
+            "view"
+          ],
+          [
+            "content",
+            "view",
+            "render",
+            "view"
+          ],
+          [
+            "compositor",
+            "view"
+          ]
+        ]
+      }
+    },
+    "utils_sha256": "3d9227b3f9ef4555ad56bb9285019fb3f998be4654305b855564a57e2f0e1d16",
+    "module_sha256": "641138e6e1cdfdbfcd52ef015c414d5e55544a660b30029403bfca5fb2f8a691",
+    "elapsed_seconds": 22.4,
+    "python": "3.12.10",
+    "platform": "macOS-26.3-arm64-arm-64bit"
+  }
+}

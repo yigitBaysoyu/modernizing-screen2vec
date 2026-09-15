@@ -1,0 +1,4 @@
+app_status,apps,screens,blacklisted_screens,apps_pct
+no screen blacklisted,4655,29184,0,50.102249488752555
+partly blacklisted,3606,35492,9456,38.811753309654506
+fully blacklisted,1030,1585,1585,11.085997201592939

@@ -1,0 +1,4 @@
+list,reason,screens,pct
+whitelist,,55220,83.33710629178552
+blacklist,empty,169,0.2550519913674711
+blacklist,opaque,10872,16.407841716847013

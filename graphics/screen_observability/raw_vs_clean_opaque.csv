@@ -1,0 +1,7 @@
+,screens,pct
+raw hierarchy has an opaque-class node,27880,42.07603265872836
+... of which visible with positive area,23558,35.55334208659694
+cleaned tree has an opaque subtree (no text below),22993,34.700653476403915
+cleaned tree has an opaque-class node exempted because its subtree carries text,3454,5.212719397533994
+raw opaque node dropped entirely by cleaning,4369,6.593622191032432
+blacklisted,11041,16.662893708214487

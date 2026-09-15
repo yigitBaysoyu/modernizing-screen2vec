@@ -1,0 +1,634 @@
+largest_opaque_class,blacklisted_screens,family
+android.webkit.WebView,3003,WebView
+com.android.browser.BrowserWebView,1125,WebView
+com.google.maps.api.android.lib6.impl.fr,952,Map
+com.facebook.webview.BasicWebView,695,WebView
+com.google.android.gms.ads.internal.overlay.q,528,Ad container
+com.google.android.gms.ads.internal.webview.n,516,Ad container
+android.view.SurfaceView,318,Surface / video
+android.view.TextureView,315,Surface / video
+maps.ad.ay$a,301,Map
+org.apache.cordova.engine.SystemWebView,244,WebView
+com.android.gallery3d.ui.GLRootView,237,Surface / video
+com.google.android.gms.ads.internal.webview.l,182,Ad container
+android.widget.VideoView,100,Surface / video
+org.crosswalk.engine.XWalkCordovaView,92,WebView
+com.unity3d.player.UnityPlayer,80,Game engine
+org.apache.cordova.CordovaWebView,71,WebView
+com.facebook.ads.internal.view.a,70,Ad container
+android.opengl.GLSurfaceView,60,Surface / video
+com.adobe.air.AIRWindowSurfaceView,55,Game engine
+com.google.android.apps.gmm.map.internal.vector.GLViewFactory$PhoenixGLTextureView,41,Map
+com.google.android.maps.MapView,29,Map
+com.facebook.ads.internal.h.a,28,Ad container
+org.chromium.content.browser.ContentViewRenderView,27,Surface / video
+ch.admin.meteoswiss.view.map.MapView,24,Map
+org.cocos2dx.lib.Cocos2dxGLSurfaceView,23,Game engine
+com.nokia.maps.MapTextureView,22,Map
+com.google.android.gms.ads.NativeExpressAdView,21,Ad container
+com.ansca.corona.graphics.opengl.CoronaGLSurfaceView,21,Game engine
+com.badlogic.gdx.backends.android.a.b,21,Game engine
+com.badlogic.gdx.backends.android.surfaceview.GLSurfaceView20,20,Game engine
+com.facebook.ads.internal.f.a,20,Ad container
+com.github.ksoichiro.android.observablescrollview.ObservableWebView,19,WebView
+com.facebook.ads.internal.i.c,19,Ad container
+com.chartboost.sdk.impl.bo,19,Ad container
+com.mopub.mraid.MraidBridge$MraidWebView,19,Ad container
+com.adobe.flashruntime.air.VideoViewAIR,18,Game engine
+com.tecarta.bible.TransparentWebView,18,WebView
+com.vervewireless.advert.d,17,Ad container
+ly.appt.GLView,17,Surface / video
+org.chromium.chrome.browser.compositor.CompositorView,16,Surface / video
+lam.justbecause.tripcheckerfree.OTCMapView,16,Map
+org.andengine.opengl.view.RenderSurfaceView,15,Game engine
+com.naver.android.hybrid.HybridWebView,15,WebView
+biblereader.olivetree.views.textEngine.web.NormalWebView,15,WebView
+com.gnresound.tinnitus.widget.GLTextureView,15,Surface / video
+com.waze.map.MapView,14,Map
+com.swingbyswing.extensions.SbsWebView,14,WebView
+com.ijinshan.browser.ui.KAndroidWebViewHolder,14,WebView
+com.facebook.webview.FacebookWebView,13,WebView
+com.ulmon.android.maprenderergl.views.GLMapView,13,Map
+com.cmcm.onews.ui.DetailWebview,13,WebView
+com.augmentra.viewranger.map.views.InteractiveMapSurfaceView,13,Surface / video
+com.azarlive.android.video.AzarWebrtcVideoView,12,Surface / video
+com.facebook.ads.internal.view.c,11,Ad container
+com.google.android.gms.ads.AdView,11,Ad container
+com.zillow.android.re.ui.homedetailsscreen.HDPTemplateCacheableWebView,11,WebView
+com.mopub.mobileads.HtmlInterstitialWebView,10,Ad container
+com.yqritc.scalablevideoview.ScalableVideoView,10,Surface / video
+org.nexage.sourcekit.mraid.MRAIDView$3,10,Ad container
+com.viamichelin.android.viamichelinmobile.common.slidingpanel.SlidingNavigationView,10,Ad container
+com.usnaviguide.radarnow.overlays.RNMapView,10,Map
+com.nbcnews.newsappui.web.NBCWebView,10,WebView
+com.baidu.platform.comapi.map.MapGLSurfaceView,10,Surface / video
+com.atlogis.mapapp.ScreenTileMapView,9,Map
+com.nutiteq.MapView,9,Map
+com.infraware.office.common.UxSurfaceView,9,Surface / video
+com.facebook.ads.internal.view.b,8,Ad container
+com.androidcentral.app.util.ObservableWebView,8,WebView
+www.ijoysoft.browser.ijoysoftwebview.IjoysoftWebView,8,WebView
+com.ndrive.ui.gl.Cor3GLSurfaceView,8,Surface / video
+com.whitescape.ride_allinone.view.WscDoubleClickVideoView,8,Surface / video
+livio.pack.lang.fr_FR.DictionaryBase$WebViewPlus,8,WebView
+jp.co.mediaactive.ghostcalldx.GCGLSurfaceView,8,Surface / video
+com.yume.android.sdk.YuMeWebViewHandler,7,WebView
+com.dolphin.browser.androidwebkit.WebViewV16,7,WebView
+livio.pack.lang.es_ES.DictionaryBase$WebViewPlus,7,WebView
+com.zhiliaoapp.musically.musmedia.mediastreamer.CameraSurfaceView,7,Surface / video
+com.skobbler.ngx.map.SKMapSurfaceView,7,Surface / video
+com.copyharuki.dictionarycommon.SearchWebView,7,WebView
+im.delight.android.webview.AdvancedWebView,6,WebView
+com.google.android.gms.auth.login.CustomWebView,6,WebView
+com.applovin.adview.AppLovinAdView,6,Ad container
+com.baronservices.mobilemet.VideoEnabledWebView,6,WebView
+md5b60ffeb829f638581ab2bb9b1a7f4f3f.WebViewRenderer,6,WebView
+ti.modules.titanium.ui.widget.webview.TiUIWebView$NonHTCWebView,6,WebView
+com.itwc.weatherplus.view.weather.WeatherVideoView,6,Surface / video
+biz.mobidev.epub3reader.v2.views.ReflowableEpub3WebView,6,WebView
+com.encar.encarMobileApp.view.SwipeToRefreshLayoutForWebView,6,WebView
+com.telenav.map.engine.GLMapSurfaceView,6,Surface / video
+com.mapmyfitness.android.activity.login.VideoBackgroundSurfaceView,6,Surface / video
+org.lds.bom.ui.widgets.ReaderWebView,6,WebView
+org.wikipedia.views.ObservableWebView,6,WebView
+com.autonavi.ae.gmap.GLMapView,6,Map
+com.medela.mymedela.ui.webview.MedelaWebView_,5,WebView
+com.inmobi.rendering.RenderView,5,Ad container
+org.cocos2d.opengl.CCGLSurfaceView,5,Surface / video
+com.supersonicads.sdk.controller.SupersonicWebView,5,WebView
+com.nhn.android.maps.NMapView,5,Map
+com.junglee.webview.JungleeWebView,5,WebView
+com.handmark.pulltorefresh.library.tfd.PullToRefreshTfdWebView,5,WebView
+com.dwarfplanet.bundle.newsdetail.ObservableWebView,5,WebView
+com.quora.android.view.QWebView,5,WebView
+com.fevdev.nakedbrowser.MyWebView,5,WebView
+com.Time.TimeWebView,5,WebView
+com.vervewireless.droid.foxwjbk.common.DetailsScrollView,5,Ad container
+com.riliclabs.countriesbeen.GLMapSurfaceView,5,Surface / video
+com.guardian.ui.views.GuardianWebView,5,WebView
+main.java.view.CustomWebView,5,WebView
+co.bytemark.cmta.core.WebFragment$MyWebView,4,WebView
+com.cmgdigital.news.views.CustomWebView,4,WebView
+com.seatguru.webview.CustomWebview,4,WebView
+com.modiface.makeup.base.layout.VirtualMakeoverGLView,4,Surface / video
+com.google.maps.api.android.lib6.gmm6.streetview.bg,4,Map
+org.xwalk.core.XWalkView,4,WebView
+com.mcom.ui.WebViewCustom,4,WebView
+catwill.reader.ReaderWebview,4,WebView
+org.mozilla.gecko.gfx.LayerView$LayerSurfaceView,4,Surface / video
+org.qtproject.qt5.android.QtSurface,4,Game engine
+com.facebook.ads.internal.h.d,4,Ad container
+com.yinzcam.nba.mobile.media.news.ScrollingCallbackWebView,4,WebView
+com.route66.maps5.egl.MapTextureView,4,Surface / video
+com.bluelionmobile.qeep.client.android.ui.NestedWebView,4,WebView
+com.ss.android.application.article.detail.MyWebViewV9,4,WebView
+com.smartprix.main.SmartWebView,4,WebView
+com.avai.amp.lib.uielements.ObservableWebView,4,WebView
+com.babycenter.calendarapp.app.view.BcWebView,4,WebView
+com.wHCHTVDIGITAL.Views.BrowserWebView,4,WebView
+com.facebook.ads.a.h.a,4,Ad container
+com.pocket.app.reader.ReaderWebView,4,WebView
+com.vacuapps.corelibrary.scene.view.SceneGLSurfaceView,4,Surface / video
+com.shopee.app.ui.webview.WebPageView_,4,WebView
+com.stumbleupon.webviewheader.widget.WebViewHeader,4,WebView
+livio.pack.lang.en_US.DictionaryBase$WebViewPlus,4,WebView
+com.mopub.mobileads.BaseWebView,4,Ad container
+com.escapistgames.android.opengl.BlissSurfaceView,4,Surface / video
+app.fastfacebook.com.webview.FacebookWebView,4,WebView
+com.nhn.android.inappwebview.InAppBaseWebView,4,WebView
+org.blueletterbible.blb.ObservableWebView,4,WebView
+com.tomtom.mydrive.trafficviewer.gui.ONATTMapView,4,Map
+co.happybits.common.ui.widgets.GLTextureView,4,Surface / video
+com.sygic.aura.views.WhiteSurfaceView,4,Surface / video
+com.globo.navigation.view.GloboWebView,4,WebView
+org.ebookdroid.ui.viewer.viewers.GLView,4,Surface / video
+com.weather.Weather.ads.BackgroundVideoAdView,4,Ad container
+com.xoddox.howtodrawanimesnaruto.views.SimpleWebView,4,WebView
+com.raycom.wcsc.common.DetailsWebView,4,WebView
+de.wetteronline.lib.wetterradar.customviews.MapView,3,Map
+com.bloomberg.android.plus.news.widgets.ContentAwareWebView,3,WebView
+com.mapbox.mapboxgl.views.MapView,3,Map
+com.imediapp.appgratis.core.webview.ModelWebView,3,WebView
+jp.tokyostudio.android.surface.ImageSurfaceView,3,Surface / video
+com.unity3d.ads.android.view.UnityAdsMainView,3,Ad container
+com.asos.app.ui.views.CustomWebView,3,WebView
+org.osmdroid.views.c,3,Map
+com.kauf.inapp.kidspaint.KidsPaintActivity$MySurfaceView,3,Surface / video
+com.raycom.wtoc.common.DetailsWebView,3,WebView
+com.gm.gemini.plugin_common_resources.ui.view.UriLoadWebView,3,WebView
+com.alaskausa.rdc.utils.CustomWebView,3,WebView
+com.bamnetworks.mobile.android.gameday.VideoWebView.VideoEnabledWebView,3,WebView
+ru.mobstudio.andgalaxy.views.GalaxyWebView,3,WebView
+younow.live.ui.views.FfmpegVideoView,3,Surface / video
+com.tapjoy.mraid.view.BasicWebView,3,Ad container
+com.templates.videodownloader.view.WebView,3,WebView
+com.onevcat.uniwebview.UniWebView,3,WebView
+flipboard.gui.FLWebView,3,WebView
+com.windyty.opengl.MyGLTextureView,3,Surface / video
+com.crittermap.backcountrynavigator.map.view.BCNMapView,3,Map
+com.duckduckgo.mobile.android.views.webview.DDGWebView,3,WebView
+com.mopub.mobileads.VastWebView,3,Ad container
+io.vov.vitamio.widget.VideoView,3,Surface / video
+com.fox.droid.foxkttv.common.DetailsWebView,3,WebView
+CustomWebView.MyWebViewAPI19,3,WebView
+com.nbc.news.view.NbcVideoView,3,Surface / video
+com.clubamerica.clubamericaapp.ui.customviews.ObservableWebView,3,WebView
+com.millennialmedia.android.MMWebView,3,Ad container
+browser.pro.zoomob.customwebview.CustomWebView,3,WebView
+co.happybits.common.views.GLTextureView,3,Surface / video
+com.djages.framework.ObservableWebView,3,WebView
+nu.tommie.inbrowser.lib.widget.InbrowserWebview,3,WebView
+com.chartboost.sdk.impl.be,3,Ad container
+org.anddev.andengine.opengl.view.RenderSurfaceView,3,Game engine
+streamly.zhiliaoapp.com.ijkplayer_widget.widget.media.IjkVideoView,3,Surface / video
+com.twitter.sdk.android.tweetui.internal.VideoView,3,Surface / video
+de.komoot.android.view.KomootMapView,3,Map
+com.fox.droid.foxksaz.common.CustomWebView,3,WebView
+ru.yandex.taxi.map.TaxiMapView,3,Map
+com.codesector.maverick.full.OpenStreetMapView,3,Map
+com.cmcm.newssdk.ui.DetailWebview,3,WebView
+com.microblink.view.surface.CameraTextureView,3,Surface / video
+com.noinnion.android.reader.ui.view.WebViewPager,3,WebView
+com.scribd.app.articles.ArticleWebView,3,WebView
+com.handmark.expressweather.maps.WMapView,3,Map
+com.stolyah.cuteponyskinsformcpe.view.RoboWebView,3,WebView
+com.givewaygames.gwgl.preview.GLSurfaceView,3,Surface / video
+com.huffingtonpost.android.base.widget.WebViewScroller,3,WebView
+com.goodbarber.v2.views.ObservableWebView,3,WebView
+com.slidejoy.control.SlideWebView_,3,WebView
+com.buzzfeed.spicerack.ui.view.SpicyWebView,3,WebView
+com.fitnow.loseit.application.UpgradeWebView,3,WebView
+com.nobu_games.android.view.web.LolipopWebView,3,WebView
+com.audioboom.ui.view.ScalableVideoView,3,Surface / video
+com.micen.buyers.widget.NotifyWebView,3,WebView
+fm.finch.widgets.ObservableWebView,3,WebView
+com.arcsoft.perfect365.common.widgets.webview.WebViewPlus,3,WebView
+net.daum.android.daum.browser.ui.view.BrowserWebView,3,WebView
+net.daum.android.daum.home.HomeWebView,3,WebView
+kal.FlightInfo.common.views.KalWebView,3,WebView
+com.futuresoft.audiobible.view.StyleableWebView,3,WebView
+com.ncaa.mmlive.app.ui.widgets.HTML5WebView,3,WebView
+com.revmob.ads.fullscreen.internal.FullscreenWebview,3,Ad container
+com.alphonso.pulse.read.NewsWebView,3,WebView
+com.splunk.mint.MintWebView,3,WebView
+com.yowanda.engine.library.ObservableWebView,3,WebView
+com.visualit.zuti.ZutiMapView,3,Map
+explore.web.browser.customwebview.CustomWebView,2,WebView
+com.goodbarber.v2.core.common.views.ObservableWebView,2,WebView
+com.applovin.adview.b,2,Ad container
+com.africasunrise.skinseed.character.TouchGLSurfaceView,2,Surface / video
+com.newbalance.loyalty.ui.component.ObservableWebView,2,WebView
+com.volaris.android.widgets.webview.DynamicOpeningWebView,2,WebView
+com.iphonedroid.marca.widget.WebViewZoomControlsFixed,2,WebView
+com.vervewireless.advert.SplashAdView,2,Ad container
+org.zirco.ui.components.CustomWebView,2,WebView
+com.appboy.ui.inappmessage.views.AppboyInAppMessageWebView,2,WebView
+org.medhelp.medtracker.view.MTWebView,2,WebView
+com.gm.gemini.plugin_common_resources.ui.view.AssetWebView,2,WebView
+com.mobiloud.tools.MLWebViewWithLoading,2,WebView
+x.ui.XUIWebView,2,WebView
+com.vervewireless.com.droid.foxwaga.common.DetailsScrollView,2,Ad container
+md508e70cc853ac5433ebadc0332c0b6377.WeboostWebViewRenderer,2,WebView
+com.ironsource.mobilcore.i$1,2,Ad container
+com.scdgroup.app.audio_book_librivox.view.CustomWebView,2,WebView
+com.wondershare.webbrowser.CustomWebView,2,WebView
+com.cookpad.android.activities.views.CustomWebView,2,WebView
+com.yxcorp.widget.SafeTextureView,2,Surface / video
+com.totaltraffic.whitelabel.MapView,2,Map
+com.revmob.ads.fullscreen.internal.FullscreenStatic,2,Ad container
+com.zhiliaoapp.musically.customview.video.BaseFillParentTextureView,2,Surface / video
+com.revmob.ads.interstitial.b.i,2,Ad container
+com.raycom.wfie.common.CustomWebView,2,WebView
+com.zhihu.daily.android.view.StoryWebView,2,WebView
+nz.co.mcom.toolkit.core.MobilitiWebView,2,WebView
+org.freedictionary.view.DictionaryWebView,2,WebView
+com.millennialmedia.android.AdViewOverlayView,2,Ad container
+com.stolyah.hotgirlskinsformcpe.view.RoboWebView,2,WebView
+com.praetorian.policeone.ui.NewsDetailsWebView,2,WebView
+com.mantano.android.library.view.SafeWebView,2,WebView
+com.fox.droid.foxwfld.common.DetailsWebView,2,WebView
+org.xwalk.core.internal.XWalkContent$1,2,WebView
+com.garmin.android.obn.client.mpm.opengl.OpenGlMapView,2,Map
+com.facebook.ads.b.j.b,2,Ad container
+com.yahoo.doubleplay.view.content.ArticleWebView,2,WebView
+com.disney.id.android.lightboxinteraction.DIDWebView$1,2,WebView
+com.SuperVchat.ui.views.BrowserWebView,2,WebView
+co.uk.apptivation.nga.library.webjourney.NGAWebView,2,WebView
+com.tencent.mm.plugin.webview.ui.tools.LogoWebViewWrapper,2,WebView
+org.cocos2dx.lib.Cocos2dxActivity$LinearLayoutDummy,2,Game engine
+com.tencent.news.webview.NewsWebView,2,WebView
+com.facebook.ads.internal.i.d,2,Ad container
+com.raycom.wlox.common.DetailsWebView,2,WebView
+com.wAppStore_3706500.ui.views.BrowserWebView,2,WebView
+com.mopub.mobileads.MraidView,2,Ad container
+io.gonative.android.LeanWebView,2,WebView
+com.motionportrait.VampireBooth.DemoGLSurfaceView,2,Surface / video
+io.silvrr.installment.common.webview.InstallmentWebView,2,WebView
+com.stackexchange.marvin.ui.common.PrettyWebView,2,WebView
+com.myheritage.libs.widget.viewgroup.WebViewContainer,2,WebView
+org.wordpress.android.ui.reader.views.ReaderWebView,2,WebView
+com.faithcomesbyhearing.android.bibleis.widgets.CustomWebView,2,WebView
+com.appestry.rokucast.acts.CastWebView,2,WebView
+com.ittus.book_template.views.SimpleWebView,2,WebView
+com.vervewireless.droid.foxwtxf.common.DetailsScrollView,2,Ad container
+com.vervewireless.droid.foxwtxf.common.CustomWebView,2,Ad container
+com.motionportrait.ZombieBooth.DemoGLSurfaceView,2,Surface / video
+com.mtp.android.mapengine.layout.MapView,2,Map
+com.ajas.coinflip.TouchSurfaceView,2,Surface / video
+com.phonevalley.progressive.custom.views.PGRWebView,2,WebView
+com.nativex.monetization.mraid.MRAIDContainer,2,Ad container
+com.telenav.scout.widget.HtmlSdkWebViewContainer,2,WebView
+com.strastar.bds114.webview.CustomWebView,2,WebView
+com.frogsparks.mytrails.MapView,2,Map
+com.nhn.android.naverdic.views.CustomWebview,2,WebView
+com.quickblox.videochat.webrtc.view.RTCGLVideoView,2,Surface / video
+com.pointinside.maps.MapView,2,Map
+com.pinkpower.freemov.widget.AdvancedWebView,2,WebView
+com.boatbrowser.free.view.BoatWebView19,2,WebView
+com.dianping.base.web.ui.NovaPullToRefreshWebView,2,WebView
+com.nespresso.ui.webview.common.NespressoWebView,2,WebView
+com.weltix.ukrainepdd.ArticlesActivity$MyWebView,2,WebView
+org.brilliant.android.web.BrWebView,2,WebView
+uv.middleware.UVMapView,2,Map
+ru.yandex.core.KDSurfaceView,2,Surface / video
+com.github.lzyzsd.jsbridge.BridgeWebView,2,WebView
+com.tencent.biz.pubaccount.CustomWebView,2,WebView
+com.stolyah.girlskinsformcpe.view.RoboWebView,2,WebView
+org.edx.mobile.view.custom.EdxWebView,2,WebView
+com.boatgo.browser.view.BoatWebView19,2,WebView
+rumble.droid.controls.readingpane.ReadingPaneWebView,2,WebView
+com.android.mail.browse.ConversationWebView,2,WebView
+com.esri.android.map.MapView,2,Map
+com.estsoft.android.ytn.qplayer.qWebView,2,WebView
+com.cjone.cjonecard.webview.ObservableWebView,2,WebView
+mobi.bcam.mobile.ui.camera.renderer.CameraGLSurfaceView,2,Surface / video
+com.neulion.smartphone.ufc.android.ui.widget.WebViewWrapper,2,WebView
+com.plantronics.headsetservice.ui.WebViewWithMetrics,2,WebView
+kr.co.kbs.news301.custom.CustomCrossWalkView,2,WebView
+org.lds.ldssa.widget.ContentWebView,2,WebView
+com.mobisystems.util.TextureVideoView,2,Surface / video
+com.google.android.gms.ads.doubleclick.PublisherAdView,2,Ad container
+com.imvu.polaris.appmod.Session3dSurfaceView,2,Surface / video
+com.raycom.kait.common.DetailsWebView,2,WebView
+info.newsapps.utils.DMWebVideoView,2,Surface / video
+org.xwalk.core.internal.XWalkViewBridge,2,WebView
+com.raycom.ktre.common.DetailsWebView,2,WebView
+com.q2.web.WebContainer$NetworkedWebView,2,WebView
+com.badoink.lib.web.VideoEnabledWebView,2,WebView
+com.ap.ui.StoryWebView,2,WebView
+com.stolyah.skinsendermanformcpe.view.RoboWebView,2,WebView
+com.wSkinForSlitherio_4127573.ui.views.BrowserWebView,2,WebView
+com.social.networks.VideoEnabledWebView,2,WebView
+com.yinzcam.nba.mobile.locator.map.MapWebView,2,WebView
+com.badlogic.gdx.backends.android.surfaceview.q,2,Game engine
+com.mylittleparis.androidlib.ui.view.MLWebView,2,WebView
+org.osmdroid.views.MapView,2,Map
+com.famousfootwear.android.views.StandardWebView,2,WebView
+org.geogebra.android.gui.video.TextureVideoView,2,Surface / video
+com.target.ui.view.common.ObservableScrollWebView,2,WebView
+com.red5pro.streaming.view.R5VideoView,2,Surface / video
+com.indeed.jobsnearby.BasicWebView,2,WebView
+com.cmgdigital.ktvutvhandset.common.DetailsWebView,2,WebView
+org.iii.romulus.meridian.core.MeridianVideoView,2,Surface / video
+com.recepti.android.WebView,2,WebView
+com.xoddox.howtodrawpokego.views.SimpleWebView,2,WebView
+com.wVINCHECKPRO3.Views.BrowserWebView,2,WebView
+com.wOnlineBBWChat.ui.views.BrowserWebView,2,WebView
+com.augmentra.viewranger.virtualEye.main.VECameraView$CameraSurfaceView,2,Surface / video
+com.trulia.android.ui.CustomWebView,2,WebView
+org.mapsforge.android.maps.MapView,2,Map
+com.microsoft.clients.views.AriaWebView,2,WebView
+com.perigee.seven.ui.view.VideoView,1,Surface / video
+com.gsshop.tvshop.web.CustomWebView,1,WebView
+com.mobiloud.tools.MLWebView,1,WebView
+ru.fedr.pregnancy.utils.NotifyingWebView,1,WebView
+com.handmark.pulltorefresh.library.PullToRefreshWebView,1,WebView
+za.co.fnb.connect.itt.gui.widget.webview.ConsolidatedWebView,1,WebView
+co.work.widgets.BrowserWebView,1,WebView
+com.ideaworks3d.marmalade.LoaderView,1,Game engine
+com.example.android.weatherlistwidget.webview.FacebookWebView,1,WebView
+mcdonalds.webview.component.CampaignWebView,1,WebView
+com.hotmob.sdk.core.view.HotmobPopupWebView,1,WebView
+com.Droidmobile.antheft.DemoGLSurfaceView,1,Surface / video
+com.idmobile.android.widget.SimpleWebView,1,WebView
+com.facebook.ads.MediaView,1,Ad container
+com.hottrix.ichocolatefree.BasicGLSurfaceView,1,Surface / video
+com.tencent.mtt.engine.x5webview.aj,1,WebView
+com.osmeta.runtime.OMSurfaceView,1,Surface / video
+com.sprylab.android.widget.TextureVideoView,1,Surface / video
+com.admarvel.android.ads.internal.e,1,Ad container
+com.collectorz.android.view.DetailWebView,1,WebView
+com.millennialmedia.internal.AdContainer,1,Ad container
+com.truckbubba.dev.tb.view.ProgressWebView,1,WebView
+talking.toy.funny.elephant.main.MySurfaceView,1,Surface / video
+com.beholder.osmdroid.MapViewEx,1,Map
+com.devbrackets.android.exomedia.ui.widget.EMVideoView,1,Surface / video
+de.kicktipp.mbookmark.KicktippWebView,1,WebView
+com.raycom.wtoc.common.CustomWebView,1,WebView
+com.genwi.defaultapp.customview.PagerWebView,1,WebView
+jp.ne.atech.android.movepaint4.free.MySurfaceView,1,Surface / video
+com.venmo.web.CustomizedWebView,1,WebView
+com.wondershare.player.VideoSurfaceView,1,Surface / video
+com.smartapps.videodownloaderforfacebook.util.ObservableWebView,1,WebView
+ly.appt.newphoto.AutoFitTextureView,1,Surface / video
+com.artelplus.howtodraw.DrawSurfaceView,1,Surface / video
+com.twoergo.foxbusinessnews.widget.video.VideoSurfaceView,1,Surface / video
+com.wacompany.mydol.view.MydolWebView,1,WebView
+com.adcolony.sdk.c,1,Ad container
+com.sly.views.SlyWebView,1,WebView
+name.cpr.VideoEnabledWebView,1,WebView
+com.globalegrow.library.view.widget.NestedWebView,1,WebView
+com.contapps.android.premium.UpgradeWebView,1,WebView
+com.pandora.android.activity.NowPlayingAdView,1,Ad container
+com.cowboys.attstadium.android.vuforia.utils.SampleApplicationGLView,1,Surface / video
+com.disney.mmm.views.LegalWebView,1,WebView
+com.waze.WzWebView,1,WebView
+sa.ui.widget.SAWebView,1,WebView
+com.sygic.familywhere.android.ar.CameraSurfaceView,1,Surface / video
+com.zhiliaoapp.musically.utils.camera.CameraSurfaceView,1,Surface / video
+com.meritnation.school.modules.user.util.HelpWebView,1,WebView
+com.netease.nr.biz.news.detailpage.NeteaseWebView,1,WebView
+com.snagajob.jobseeker.webkit.WebView,1,WebView
+com.raycom.wfie.common.DetailsWebView,1,WebView
+com.wikia.library.view.DimmerSwitchWebView,1,WebView
+com.quickblox.videochat.webrtc.view.QBGLVideoView,1,Surface / video
+com.facebook.react.views.webview.ReactWebViewManager$ReactWebView,1,WebView
+com.lego.sdk.legoid.presentation._LEGOIDWebView,1,WebView
+alliantmobile.droid.views.AlliantWebView,1,WebView
+com.honest.foundation.ui.TextureVideoView,1,Surface / video
+com.vervewireless.droid.foxkdfw.common.DetailsScrollView,1,Ad container
+com.emogoth.android.phone.mimi.view.CaptchaWebView,1,WebView
+de.neom.neoreader.SoftwareWebView,1,WebView
+flipboard.gui.FLWebViewNoScale,1,WebView
+com.wikitude.architect.ArchitectWebView,1,WebView
+farlex.mobidic.controls.HybridWebViewRenderer,1,WebView
+com.lazada.customviews.video.CustomVideoTextureView,1,Surface / video
+com.vitalsource.bookshelf.widgets.AccountFullscreenWebView,1,WebView
+com.izzostudio.freemusic.view.RoboWebView,1,WebView
+common.ObservableWebView,1,WebView
+com.here.mapcanvas.MapCanvasView,1,Map
+com.bambuna.podcastaddict.view.AspectRatioVideoView,1,Surface / video
+com.hotmob.android.webview.util.HotmobPopupWebViewMaker$1,1,WebView
+com.igg.android.gametalk.ui.widget.web.BrowserWebView,1,WebView
+com.luxy.ui.PlayVideoView,1,Surface / video
+com.snapchat.android.ui.FixedAspectRatioSurfaceView,1,Surface / video
+com.bandsintown.view.BackgroundVideoView,1,Surface / video
+com.hulu.thorn.ui.widget.TextureVideoView,1,Surface / video
+com.glow.android.eve.ui.widget.BaseWebView,1,WebView
+com.badlogic.gdx.backends.android.AndroidGraphics$1,1,Game engine
+com.facebook.widget.refreshableview.RefreshableWebViewContainer,1,WebView
+com.lmn.cnews.ObservableWebView,1,WebView
+com.raycom.kplc.common.CustomWebView,1,WebView
+com.jiubang.browser.androidwebkit.CustomWebView,1,WebView
+md5fac990104f2b9c212433bc723b5e4663.ExtendedWebView,1,WebView
+hu.tonuzaba.photowarp2.CaricatureSurfaceView,1,Surface / video
+fr.atlassi.babynightlight.VideoSurfaceView,1,Surface / video
+com.hottrix.water.BasicGLSurfaceView,1,Surface / video
+com.pAADHAARCard.ui.views.BrowserWebView,1,WebView
+com.raycom.wlox.common.CustomWebView,1,WebView
+co.purpleocean.android.videoplayer.VideoTextureView,1,Surface / video
+com.runtastic.android.results.ui.FastVideoView,1,Surface / video
+es.latinchat.engine.MyWebView,1,WebView
+com.box.android.views.BoxOAuthWebView,1,WebView
+com.instructure.candroid.view.CanvasWebView,1,WebView
+com.griffincommunications.droid.news9.common.CustomWebView,1,WebView
+com.griffincommunications.droid.news9.common.DetailsWebView,1,WebView
+net.adgjm.angel.WebViewPager,1,WebView
+com.amcom.MEClient.UI.AmcHTML5WebView,1,WebView
+com.microsoft.xbox.toolkit.ui.XLEWebView,1,WebView
+com.google.android.apps.youtube.music.signin.OnboardingVideoView,1,Surface / video
+com.kddi.ar.satch.satchviewer.view.SvWebView,1,WebView
+com.artech.controls.GxWebView,1,WebView
+com.bumble.app.ui.launcher.view.LauncherVideoView,1,Surface / video
+com.galbro.cataloneandroid.DemoGLSurfaceView,1,Surface / video
+com.shazam.android.widget.ShWebView,1,WebView
+net.eefan.starfree.StarGLSurfaceView,1,Surface / video
+org.rferl.ui.widget.PagerWebView,1,WebView
+com.danvelazco.fbwrapper.webview.FacebookWebView,1,WebView
+com.tts.gueststar.menu.view.MenuWebView,1,WebView
+com.hard2bit.apps.chatsim.view.TextureVideoView,1,Surface / video
+com.bewogdsq.sevlyszj94640.MraidView,1,Ad container
+com.vingtminutes.ui.view.webview.ArticleWebView,1,WebView
+com.vk.sdk.WebView,1,WebView
+com.tapjoy.mraid.view.MraidView,1,Ad container
+com.sbg.mobile.common.android.bridge.SbgWebView,1,WebView
+com.westpac.banking.android.wbc.webview.AndroidWebView,1,WebView
+talking.toy.tyrannosaurus.rex.main.MySurfaceView,1,Surface / video
+biblereader.olivetree.views.AccountInteractionWebView,1,WebView
+com.a0soft.gphone.base.widget.blNoLeakWebView,1,WebView
+com.gannett.android.news.ui.view.web.WebViewResizeNotifying,1,WebView
+com.kayac.nakamap.components.BaseWebViewFrame,1,WebView
+com.millennialmedia.internal.MMWebView,1,Ad container
+com.alarm.alarmmobile.android.view.AlarmWebView,1,WebView
+com.yummly.android.ui.ObservableWebView,1,WebView
+com.zhiliaoapp.lively.uikit.widget.videoview.BaseFillParentTextureView,1,Surface / video
+com.homesnap.core.view.SplashVideoView,1,Surface / video
+com.whaff.whaffapp.view.WhaffWebView,1,WebView
+com.firstrowria.android.soccerlivescores.views.dailymotion.DMWebVideoView,1,Surface / video
+com.chartboost.sdk.impl.bk,1,Ad container
+com.bumrewse.appstoide.view.RoboWebView,1,WebView
+com.heyzap.house.view.InterstitialWebView,1,WebView
+com.wRichMamaDating.ui.views.BrowserWebView,1,WebView
+com.zing.zalo.webview.ZaloSystemWebView,1,WebView
+com.cox.homesecurity.WebViewContainer$InterceptingWebView,1,WebView
+com.droid.foxkmsp.common.DetailsWebView,1,WebView
+co.good.android.ui.view.GCWebView,1,WebView
+com.clevertap.android.sdk.InAppNotificationActivity$InAppWebView,1,WebView
+md5611b4becc3cd555f6fc751525170cb57.DWWebView,1,WebView
+com.yandex.mail.react.ReactWebView,1,WebView
+com.csnmedia.android.bg.widgets.BibleWebView,1,WebView
+maps.T.D,1,Map
+com.wdc.wdremote.ui.widget.EulaWebView,1,WebView
+com.dailyyoga.view.HTML5WebView,1,WebView
+com.jet8.sdk.ui.widget.webview.J8WebView,1,WebView
+com.triposo.droidguide.world.InternalWebView,1,WebView
+com.burnweb.rnwebview.RNWebView,1,WebView
+com.youtube.websdk.YTWebVideoView,1,Surface / video
+com.draftkings.dknativermgGP.views.customviews.FillScreenVideoView,1,Surface / video
+com.walmartone.views.WmOneWebView,1,WebView
+com.androidlab.gpsfix.view.map.StaticMapView,1,Map
+com.rollingstory.spottoon.detail.toonview.ObservableWebView,1,WebView
+com.google.android.gms.maps.MapView,1,Map
+org.cocos2dx.lib.bu,1,Game engine
+com.runtastic.android.runtasty.view.videoplayer.FastVideoView,1,Surface / video
+com.thegrizzlylabs.geniusscan.sdk.camera.PreviewSurfaceView,1,Surface / video
+com.edmodo.androidlibrary.BaseWebView,1,WebView
+org.brilliant.android.web.EmbeddedWebView,1,WebView
+net.jimblackler.newswidget.ArticleWebView,1,WebView
+org.mospi.moml.webkit.pub.ui.MOMLUIAgateWebView,1,WebView
+com.appnext.appnextinterstitial.VideoEnabledWebView,1,Ad container
+com.apps4you.virtualbeer.BeerSurfaceView,1,Surface / video
+com.ego360.lab.DemoGLSurfaceView,1,Surface / video
+media.itsme.common.widget.view.FlyVideoView,1,Surface / video
+com.shopmium.ui.views.widgets.ShopmiumWebView,1,WebView
+com.vervewireless.droid.foxwttg.common.CustomWebView,1,Ad container
+com.vervewireless.droid.foxwttg.common.DetailsScrollView,1,Ad container
+com.vervewireless.droid.foxwttg.v2.flexibleui.cssviews.CssImageView,1,Ad container
+com.wordreference.ScrollableWebView,1,WebView
+com.spuul.android.mobile.common.customviews.ScalableVideoView,1,Surface / video
+com.lotus.android.common.widget.LotusWebView,1,WebView
+com.tdbank.sbib.webkit.TDWebView,1,WebView
+com.tdbank.sbib.webkit.TDLoginWebView,1,WebView
+com.pallosalama.dice.GlView,1,Surface / video
+kr.backpackr.me.commonlib.android.view.BackPackrJavaScriptWebView,1,WebView
+com.access_company.android.comicwalker.WebViewWithFooter,1,WebView
+com.access_company.android.comicwalker.store.StoreWebView,1,WebView
+com.hottrix.imilkfree.BasicGLSurfaceView,1,Surface / video
+com.kakao.story.ui.widget.CustomWebView,1,WebView
+org.prowl.torquefree.views.MainLayout$MySurfaceView,1,Surface / video
+com.fox.droid.foxkriv.common.DetailsWebView,1,WebView
+ch.search.android.search.UltraWebView,1,WebView
+com.fotoable.cn.weather.widget.TextureVideoView,1,Surface / video
+com.inbox.boro.lite.MyWebView,1,WebView
+com.admarvel.android.ads.f,1,Ad container
+com.indeed.android.jobsearch.webview.IndeedWebView,1,WebView
+org.CrossApp.lib.CrossAppGLSurfaceView,1,Surface / video
+com.runrev.android.OpenGLView,1,Surface / video
+com.Vertifi.DeposZip.Library.LoginWebView,1,WebView
+com.giderosmobile.android.GiderosGLSurfaceView,1,Surface / video
+com.unshuus.games.kidsmemo.CustomSurfaceView,1,Surface / video
+joelosteen.android.phone.JOMApp.layout.WebViewFull,1,WebView
+com.lumoslabs.lumosity.GameGLSurfaceView,1,Surface / video
+com.worklight.androidgap.WLWebView,1,WebView
+com.revmob.ads.interstitial.internal.e,1,Ad container
+com.CountyJailInmateSearch.Views.BrowserWebView,1,WebView
+com.imgur.mobile.view.StableTextureView,1,Surface / video
+com.crone.skinsforminecraftpepro.minecraftskinrender.SkinGLSurfaceView,1,Surface / video
+com.lumowell.dailycardio.DemoGLSurfaceView,1,Surface / video
+com.deezer.android.ui.widget.DeezerWebview,1,WebView
+com.lyft.widgets.TextureVideoView,1,Surface / video
+jp.co.psoft.ZenBrushLib.ZenBrushGLSurfaceView,1,Surface / video
+com.laugh.talking.koala.main.MySurfaceView,1,Surface / video
+com.blio.androidreader.library.BlioWebView,1,WebView
+com.kaldorgroup.pugpig.ui.WebView,1,WebView
+com.ohso.omg.views.TrackableWebView,1,WebView
+org.chromium.content.browser.ContentVideoView,1,Surface / video
+com.mynamecubeapps.ball.views.SphereSurfaceView,1,Surface / video
+com.valvesoftware.android.steam.community.views.SteamWebView,1,WebView
+com.maxlogix.utils.NestedWebView,1,WebView
+com.beme.views.BemeWebView,1,WebView
+com.apptracker.android.advert.AppWebView,1,Ad container
+com.yoshop.view.widget.NestedWebView,1,WebView
+com.ego360.butt.DemoGLSurfaceView,1,Surface / video
+com.mx.browser.MxWebViewV8,1,WebView
+com.ibp.androidapp.view.IBPWebView,1,WebView
+com.magnifis.parking.views.TheMapView,1,Map
+com.ideateca.core.util.GLSurfaceView,1,Surface / video
+comm.cchong.Common.Widget.HTML5WebView,1,WebView
+com.mklimek.frameviedoview.FrameVideoView,1,Surface / video
+com.mxapah.mjrlsx263996.MraidView,1,Ad container
+com.autopten.cheapcarsforsale.view.RoboWebView,1,WebView
+talking.toy.pretty.girl.main.MySurfaceView,1,Surface / video
+com.nice.widgets.BackgroundVideoView,1,Surface / video
+com.MayersDev.TelaAssustadora.DemoGLSurfaceView,1,Surface / video
+com.arcsoft.PhotoJourni.opengl.GLRootView,1,Surface / video
+talking.toy.funny.donkey.main.MySurfaceView,1,Surface / video
+com.apptdio.apptdio.view.RoboWebView,1,WebView
+com.pashkov.sexcubefull.MyGLSurfaceView,1,Surface / video
+se.yo.android.bloglovincore.ui.webBroswer.BloglovinWebView,1,WebView
+com.adultswim.apps.network.common.ui.UIWebView,1,WebView
+org.chromium.android_webview.FullScreenView,1,WebView
+cc.pacer.androidapp.ui.faq.SwipeRefreshLayoutForWebView,1,WebView
+com.digg.views.DiggWebView,1,WebView
+com.dailymotion.websdk.DMWebVideoView,1,Surface / video
+com.qustodian.sdk.HTML5WebView,1,WebView
+com.raycom.wsfa.common.DetailsWebView,1,WebView
+com.iridianstudio.sgbuses.ExtendedMapView,1,Map
+com.LollyTapp.MLGAirhornUltimate.DemoGLSurfaceView,1,Surface / video
+com.lumowell.dailyabs.DemoGLSurfaceView,1,Surface / video
+com.appdlab.radarexpress.NonLeakingWebView,1,WebView
+pl.openrnd.onboarding.views.FrameVideoView,1,Surface / video
+com.yahoo.mobile.client.share.search.ui.SearchBrowserWebView,1,WebView
+com.dayglows.vivid.views.WebViewEx,1,WebView
+com.movenetworks.views.MWebView,1,WebView
+com.google.android.exoplayer.VideoSurfaceView,1,Surface / video
+com.duobao.us.view.component.StarbabaPullToRefreshWebView,1,WebView
+com.hipu.yidian.ui.widgets.ParticleWebView,1,WebView
+com.bbcollaborate.compat.BbWebView,1,WebView
+com.craftar.CraftARSurfaceView,1,Surface / video
+com.nfaralli.particleflow.ParticlesSurfaceView,1,Surface / video
+com.jiochat.jiochatapp.ui.fragments.rmc.CustomBightcoveVideoView,1,Surface / video
+com.xda.labs.DiscoverWebView,1,WebView
+org.blitzortung.android.map.OwnMapView,1,Map
+md55044841ab333f5817d82802c74d53658.ZXingSurfaceView,1,Surface / video
+com.raycom.wdam.common.CustomWebView,1,WebView
+com.raycom.wdam.common.DetailsWebView,1,WebView
+com.t11.skyview.scene.CameraSurfaceView,1,Surface / video
+com.perk.rewardsredemption.view.RewardsRedemptionWebView,1,WebView
+com.functionx.viggle.view.VAPPWebView,1,WebView
+com.jodelapp.jodelandroidv3.view.EulaWebView,1,WebView
+com.ec.demo.ui.CrossWalkWebView,1,WebView
+com.ffree.Common.Widget.HTML5WebView,1,WebView
+talking.toy.funny.couple.main.MySurfaceView,1,Surface / video
+com.ego360.sevenminute.DemoGLSurfaceView,1,Surface / video
+com.raycom.waff.common.DetailsWebView,1,WebView
+com.facebook.ads.internal.view.a.d,1,Ad container
+com.ksmobile.launcher.view.SplashSurfaceView,1,Surface / video
+com.ksmobile.business.sdk.search.webview.SearchWebView,1,WebView
+livio.pack.lang.it_IT.DictionaryBase$WebViewPlus,1,WebView
+jp.ne.poropi.scouter.view.CameraSurfaceView,1,Surface / video
+com.raycom.ktre.common.CustomWebView,1,WebView
+com.hodgepig.wmata.WebView,1,WebView
+talking.toy.funny.giraffe.main.MySurfaceView,1,Surface / video
+com.raycom.wtvm.common.CustomWebView,1,WebView
+com.biggu.shopsavvy.view.TextureVideoView,1,Surface / video
+com.zillow.android.ui.controls.ZillowWebView,1,WebView
+com.uc.browser.WebViewJUC,1,WebView
+talking.toy.funny.panda.main.MySurfaceView,1,Surface / video
+com.chartboost.sdk.impl.bh,1,Ad container
+ru.onlinepp.bestru.ui.view.CustomWebView,1,WebView
+com.revmob.ads.c.b.e,1,Ad container
+com.coupons.mobile.ui.templates.webview.LUDefaultWebViewTemplate,1,WebView
+com.univision.android.core.views.CustomWebView,1,WebView
+com.raycom.kold.common.DetailsWebView,1,WebView
+com.ndcatiiklmc.AdWebView,1,WebView
+com.chatous.chatous.ui.view.SpaceBackgroundSurfaceView,1,Surface / video
+com.bessiambre.speedCore.SpeedMapView,1,Map
+com.skyscape.android.ui.VideoSurfaceView,1,Surface / video
+yo.app.view.AppGLSurfaceView,1,Surface / video
+com.johnnys_web.www.ViewerActivity$SessionedWebView,1,WebView
+net.osmand.plus.views.controls.DynamicListView,1,Map
+com.dojomadness.lolsumo.ui.custom.CenterCropVideoView,1,Surface / video
+com.inmobi.re.container.IMWebView,1,Ad container
+fm.xiami.main.component.webview.XMPullToRefreshWebView,1,WebView
+com.oxbowsoft.debtplanner.CustomWebView,1,WebView

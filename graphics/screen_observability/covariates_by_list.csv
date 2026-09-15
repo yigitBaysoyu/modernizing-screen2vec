@@ -1,0 +1,17 @@
+covariate,list,n,mean,sd,median,q1,q3,covariate_label
+clean_component_count,whitelist,55220,25.102245563201738,20.081812025446276,20.0,11.0,34.0,Cleaned components
+clean_component_count,blacklist,11041,12.01159315279413,14.560557316076515,7.0,4.0,14.0,Cleaned components
+clean_leaf_count,whitelist,55220,18.726294820717133,15.362777889831635,14.0,8.0,25.0,Leaf components
+clean_leaf_count,blacklist,11041,7.442170093288651,10.469379634340775,4.0,1.0,9.0,Leaf components
+largest_image_leaf_fraction,whitelist,55220,0.03169494569396958,0.13639760838387036,0.0,0.0,0.00122436,Largest unlabelled image leaf
+largest_image_leaf_fraction,blacklist,11041,0.010408662177610724,0.08089819362326182,0.0,0.0,0.0,Largest unlabelled image leaf
+leaf_coverage,whitelist,55220,0.5105213614016842,0.2806050002954974,0.49245,0.261606,0.766758,Leaf coverage of frame
+leaf_coverage,blacklist,11041,0.2298436577822661,0.3478084513150433,0.0481584,0.0,0.268544,Leaf coverage of frame
+max_depth,whitelist,55220,2.934208620065194,1.4050018911530464,3.0,2.0,4.0,Tree depth
+max_depth,blacklist,11041,2.537179603296803,1.4568985003403905,2.0,1.0,4.0,Tree depth
+rare_class_share,whitelist,55220,0.054627578989134375,0.13372851409856182,0.0,0.0,0.0377358,Share of rare classes (< 5 screens)
+rare_class_share,blacklist,11041,0.04192824845575582,0.13345784133486624,0.0,0.0,0.0,Share of rare classes (< 5 screens)
+raw_node_count,whitelist,55220,101.83864541832669,95.13553277385789,71.0,34.0,139.0,Raw hierarchy nodes
+raw_node_count,blacklist,11041,67.73471605832805,80.65633728894001,31.0,9.0,106.0,Raw hierarchy nodes
+text_component_count,whitelist,55220,12.06307497283593,10.925922481209787,9.0,5.0,16.0,Components with text
+text_component_count,blacklist,11041,4.250973643691695,6.543455298952982,2.0,0.0,5.0,Components with text
