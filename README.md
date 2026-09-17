@@ -184,7 +184,9 @@ python 4_sweep_embedding_dimensions.py plot                               # rege
 ```
 
 Only Top-1 and MRR are informative (`FINDINGS.md` 2-3); the other columns are kept
-for completeness.
+for completeness. `_results_dimension_sweep.ipynb` reads every `dimension_sweep/results*.json`
+and renders one compact table and one paper-style figure per configuration, exporting
+CSV, PDF and a LaTeX fragment to `graphics/dimension_sweep/`.
 
 ## Replicating & Beating Screen2Vec Table 3 (GUI Screen Prediction)
 
