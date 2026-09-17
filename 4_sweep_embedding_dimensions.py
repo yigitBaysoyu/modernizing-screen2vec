@@ -23,9 +23,15 @@ except for the dimension (and, optionally, hidden width / seed / protocol):
 
 {proto} is the protocol suffix the scripts themselves use ("" permissive,
 "_strict", "_nbackK"); {tag} is empty for the recipe defaults (hidden 1024,
-seed 42) and "_h<H>" / "_s<S>" otherwise, so the D=768 recipe point produces
-exactly the artefacts the notebooks already read, and a hidden-width or seed
-repeat can never overwrite them (9_train_joint.py --artifact_tag).
+seed 42) and "_h<H>" / "_s<S>" otherwise, so a hidden-width or seed repeat
+can never overwrite the canonical checkpoints (9_train_joint.py
+--artifact_tag).
+
+The default sweep covers D = 16 ... 2048.  Because D=2048 needs a projector
+hidden layer wider than the recipe's 1024, the default hidden width is 4096
+for every point (one width across the whole curve, so only D varies); run
+with --hidden_dim 1024 to reproduce the README recipe exactly for D <= 1024,
+in which case the D=768 point writes the very artefacts the notebooks read.
 
 Every stage resolves trace keys through trace_layout_index.csv (the scripts
 refuse to run without it); numbers from before the 2026-08-21 index fix are
@@ -43,8 +49,11 @@ every completed run.  Completed (dimension, seed) pairs are skipped on re-run
 (--force to redo).  Per-stage logs go to dimension_sweep/logs/ (gitignored).
 
 Usage:
-    # Recipe sweep (permissive protocol, seed 42, hidden 1024):
+    # Default sweep (16 ... 2048, permissive protocol, seed 42, hidden 4096):
     python 4_sweep_embedding_dimensions.py run --gpu 0
+
+    # README recipe width (hidden 1024; D=768 is then the canonical run):
+    python 4_sweep_embedding_dimensions.py run --hidden_dim 1024 --dims 16,32,64,128,256,512,768,1024
 
     # Screen2Vec's own population, selected dimensions:
     python 4_sweep_embedding_dimensions.py run --protocol strict --dims 64,256,768
@@ -52,9 +61,6 @@ Usage:
     # Seed repeats (mean +- std, error bars); non-42 intermediates are deleted
     # after their metrics are recorded unless --keep_artifacts:
     python 4_sweep_embedding_dimensions.py run --dims 32,128,768 --seeds 42,43,44
-
-    # Dimensions above 1024 need a wider projector hidden layer:
-    python 4_sweep_embedding_dimensions.py run --dims 1024,2048 --hidden_dim 4096
 
     # Show the commands without running anything:
     python 4_sweep_embedding_dimensions.py run --dims 768 --dry_run
@@ -79,8 +85,14 @@ from pathlib import Path
 import trace_index
 
 SWEEP_DIR = Path("dimension_sweep")
-DEFAULT_DIMS = (32, 64, 128, 256, 512, 768, 1024)
+DEFAULT_DIMS = (16, 32, 64, 128, 256, 512, 768, 1024, 2048)
+# Width of the projector's hidden layer.  The README recipe uses 1024, which
+# caps the sweep at D=1024 (a wider output would be rank-limited).  The
+# default sweep therefore uses 4096 for EVERY point, so only D varies across
+# the curve; artefacts and results of that width carry a _h4096 suffix, and
+# --hidden_dim 1024 reproduces the README recipe exactly for D <= 1024.
 RECIPE_HIDDEN_DIM = 1024
+DEFAULT_HIDDEN_DIM = 4096
 RECIPE_SEED = 42
 RAW_EMBEDDINGS_DIR = "embeddings_4096_last"
 
@@ -468,10 +480,11 @@ def build_parser() -> argparse.ArgumentParser:
                              "(default: permissive, the README recipe). See 4_evaluate_screen_prediction.py.")
     common.add_argument("--nback", type=int, default=None, metavar="K",
                         help="Context length for --protocol nback")
-    common.add_argument("--hidden_dim", type=int, default=RECIPE_HIDDEN_DIM,
-                        help=f"Projector hidden width (recipe default {RECIPE_HIDDEN_DIM}); must be >= every "
-                             "swept dimension, otherwise the output is rank-limited. Non-default widths "
-                             "write _h<H>-suffixed artefacts and results.")
+    common.add_argument("--hidden_dim", type=int, default=DEFAULT_HIDDEN_DIM,
+                        help=f"Projector hidden width, applied to every point (default {DEFAULT_HIDDEN_DIM} so "
+                             f"that D=2048 fits; the README recipe uses {RECIPE_HIDDEN_DIM}). Must be >= every "
+                             "swept dimension. Widths other than the recipe's write _h<H>-suffixed "
+                             "artefacts and results.")
 
     run_p = sub.add_parser("run", parents=[common], help="Run the sweep (resumable)")
     run_p.add_argument("--dims", type=str, default=",".join(str(d) for d in DEFAULT_DIMS),

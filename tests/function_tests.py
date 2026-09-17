@@ -352,7 +352,8 @@ class TestDimensionSweep(unittest.TestCase):
 
     def test_commands_pass_protocol_to_trainer_and_evaluator(self):
         parser = self.sweep.build_parser()
-        args = parser.parse_args(["run", "--protocol", "strict", "--dims", "64", "--seeds", "43"])
+        args = parser.parse_args(["run", "--protocol", "strict", "--dims", "64", "--seeds", "43",
+                                  "--hidden_dim", "1024"])
         commands = dict(self.sweep.build_commands(64, args, 43))
         self.assertIn("--strict", commands["train"])
         self.assertIn("--strict", commands["eval"])
@@ -360,6 +361,13 @@ class TestDimensionSweep(unittest.TestCase):
         self.assertEqual(commands["train"][commands["train"].index("--artifact_tag") + 1], "_s43")
         self.assertIn("lstm_predictor_64d_strict_s43.pth", commands["eval"])
         self.assertNotIn("--strict", commands["app"])
+        # Default width is 4096 so that D=2048 fits; it tags every artefact uniformly.
+        default_args = parser.parse_args(["run", "--dims", "2048"])
+        default_cmds = dict(self.sweep.build_commands(2048, default_args, 42))
+        self.assertEqual(default_cmds["train"][default_cmds["train"].index("--hidden_dim") + 1], "4096")
+        self.assertIn("lstm_predictor_2048d_h4096.pth", default_cmds["eval"])
+        self.assertEqual(self.sweep.DEFAULT_DIMS[0], 16)
+        self.assertEqual(self.sweep.DEFAULT_DIMS[-1], 2048)
 
     def test_parse_eval_metrics(self):
         text = (

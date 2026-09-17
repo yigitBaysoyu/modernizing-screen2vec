@@ -169,14 +169,18 @@ ids, one per line) for training arms restricted to either list.
 ## Embedding-dimension sweep (Table 3)
 
 `4_sweep_embedding_dimensions.py` runs the joint Table 3 recipe below once per
-projection dimension and collects Top-1, Top-k%, MRR and nRMSE into
-`dimension_sweep/` (results JSON, table, CSV, curve figure). The D=768 point writes
-exactly the artefacts of `_run_table3_pipeline2.ps1`; other hidden widths and seeds
-get `_h<H>` / `_s<S>` suffixes via `9_train_joint.py --artifact_tag`, so they never
-overwrite the canonical checkpoints.
+projection dimension (default 16 ... 2048) and collects Top-1, Top-k%, MRR and nRMSE
+into `dimension_sweep/` (results JSON, table, CSV, curve figure). Because D=2048 does
+not fit the recipe's 1024-wide projector hidden layer, the default sweep uses hidden
+width 4096 for every point so that only D varies; `--hidden_dim 1024` reproduces the
+README recipe exactly up to D=1024, and its D=768 point then writes the artefacts of
+`_run_table3_pipeline2.ps1`. Other hidden widths and seeds get `_h<H>` / `_s<S>`
+suffixes via `9_train_joint.py --artifact_tag`, so they never overwrite the canonical
+checkpoints.
 
 ```bash
-python 4_sweep_embedding_dimensions.py run --gpu 0                       # 32 ... 1024, permissive
+python 4_sweep_embedding_dimensions.py run --gpu 0                       # 16 ... 2048, hidden 4096, permissive
+python 4_sweep_embedding_dimensions.py run --hidden_dim 1024 --dims 16,32,64,128,256,512,768,1024   # recipe width
 python 4_sweep_embedding_dimensions.py run --protocol strict --dims 64,256,768
 python 4_sweep_embedding_dimensions.py run --dims 32,128,768 --seeds 42,43,44   # mean +- std
 python 4_sweep_embedding_dimensions.py run --dims 768 --dry_run           # print the commands
