@@ -3,7 +3,7 @@
 Last regenerated: 2026-09-18, on branch `dev`. This is the repository's orientation
 document: what the project is, what exists, what is finished, and where the evidence
 lives. Operational invariants (ID namespaces, naming conventions, protocol flags) live in
-`AGENTS.md`; the Table 3 replication audit lives in `REPLICATION_AUDIT.md`.
+`CLAUDE.md`; the Table 3 replication audit lives in `REPLICATION_AUDIT.md`.
 
 ## What this repository is
 
