@@ -18,7 +18,7 @@ downstream tasks:
 A third line (`10_`–`13_`) reproduces the paper's component-prediction task (Table 2).
 
 Read `SUMMARY.md` for the full technical picture and the current defensible result
-claims, and `FINDINGS.md` for the trace-indexing bug and the four measurement
+claims, and `REPLICATION_AUDIT.md` for the trace-indexing bug and the four measurement
 problems in the paper's Table 3. `README.md` holds the user-facing pipeline recipes.
 `screen2vec-master/` and `screen2vec-paper/` are the original authors' code and paper.
 

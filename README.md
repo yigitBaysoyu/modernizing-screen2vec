@@ -187,7 +187,7 @@ python 4_sweep_embedding_dimensions.py run --dims 768 --dry_run           # prin
 python 4_sweep_embedding_dimensions.py plot                               # regenerate outputs
 ```
 
-Only Top-1 and MRR are informative (`FINDINGS.md` 2-3); the other columns are kept
+Only Top-1 and MRR are informative (`REPLICATION_AUDIT.md` 2-3); the other columns are kept
 for completeness. `_results_dimension_sweep.ipynb` reads every `dimension_sweep/results*.json`
 and renders one compact table and one paper-style figure per configuration, overlays the
 hidden widths of each protocol against each other, and exports CSV, PDF and LaTeX

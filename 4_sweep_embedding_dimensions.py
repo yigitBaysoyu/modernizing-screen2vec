@@ -35,9 +35,9 @@ in which case the D=768 point writes the very artefacts the notebooks read.
 
 Every stage resolves trace keys through trace_layout_index.csv (the scripts
 refuse to run without it); numbers from before the 2026-08-21 index fix are
-void and must not be mixed into a results file -- see FINDINGS.md.
+void and must not be mixed into a results file -- see REPLICATION_AUDIT.md.
 
-Reading the results (FINDINGS.md sections 2-3): Top-1 and MRR are the
+Reading the results (REPLICATION_AUDIT.md sections 2-3): Top-1 and MRR are the
 informative columns.  Top-0.1% and above are saturated by the app-description
 half (an app-only oracle already reaches 0.9968 at Top-0.1%), and normalised
 RMSE is not comparable to the paper's.  The figure therefore plots Top-1 and
@@ -363,7 +363,7 @@ def write_table(paths: SweepPaths, results: dict) -> str:
         f"raw={meta.get('raw_embeddings_dir', '?')}  seeds={meta.get('seeds', '?')}",
         "Final embedding per point = D screen dims + 768 app-description dims",
         "Top-1 and MRR are the informative columns; Top-0.1% and above are saturated by app identity,",
-        "and Norm.RMSE is not comparable to the paper's (FINDINGS.md 2-3).",
+        "and Norm.RMSE is not comparable to the paper's (REPLICATION_AUDIT.md 2-3).",
         "=" * len(header), header, "-" * len(header),
     ]
     for dim_key in sorted(stats, key=int):

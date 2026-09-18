@@ -1,4 +1,15 @@
-# Screen2Vec Replication — Findings
+# Screen2Vec Replication Audit
+
+> **What this file is.** The audit from replicating Screen2Vec's Table 3: one bug in our
+> pipeline (found and fixed — status below) and four measurement problems in the original
+> paper's evaluation. It is **not** this project's results — those live in the
+> `_results_*.ipynb` notebooks and the results manifest.
+>
+> **Status (2026-09-18).** Finding #1 is fixed (commit 90a6b8b) and re-verified against the
+> current code: all trace-consuming stages resolve gesture keys through `trace_index.py`.
+> One exception: `7_evaluate_weight_sweep.py` predates the fix, still contains the old
+> lookup, and must not be used. Findings #2–5 describe the original paper's evaluation and
+> remain current.
 
 Review of our GUI screen prediction pipeline against Screen2Vec (Li et al., CHI 2021),
 its released source, and the RICO dataset.
