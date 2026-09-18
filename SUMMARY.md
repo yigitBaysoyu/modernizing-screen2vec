@@ -1,215 +1,141 @@
-# screen2vec-revisited: Technical Repository Summary
+# screen2vec-revisited: Technical Summary
 
-## Plain-English overview
+Last regenerated: 2026-09-18, on branch `dev`. This is the repository's orientation
+document: what the project is, what exists, what is finished, and where the evidence
+lives. Operational invariants (ID namespaces, naming conventions, protocol flags) live in
+`AGENTS.md`; the Table 3 replication audit lives in `REPLICATION_AUDIT.md`.
 
-This repository revisits the 2021 CHI paper **Screen2Vec: Semantic Embedding of GUI Screens and GUI Components** using modern foundation models. The original Screen2Vec system built a numerical representation of an Android screen from its text, component types, layout, and app-store description, then learned from groups of screens occurring in the same RICO interaction trace. This project replaces much of that hand-built representation pipeline with representations extracted by Qwen vision-language/foundation models and trains smaller task-specific networks on top.
+## What this repository is
 
-The project has two main goals:
+This repository revisits *Screen2Vec* (Li et al., CHI 2021) with a frozen foundation
+model. Every RICO screen (screenshot + cleaned view-hierarchy JSON) is embedded by the
+released **Qwen3-VL-Embedding-8B**, used unchanged; small task networks are trained on top
+of the frozen vectors. Two experimental tracks are complete, one was attempted and
+retired:
 
-1. **Interaction screen-sequence prediction:** given the screens already visited in a mobile interaction, predict which screen comes next. The predicted vector is compared with the corpus of RICO screen vectors, turning prediction into nearest-neighbor retrieval.
-2. **JSON UI reconstruction:** compress a screenshot plus cleaned Android view hierarchy into an embedding, then decode that embedding back into a compact JSON description of the screen. The output should recover the screen identity, component types, text/metadata, hierarchy, and approximate component positions.
+1. **Reconstruction** — a LLaVA-style adapter (MLP projector + LoRA-tuned decoder LM)
+   decodes an embedding back into the cleaned view-hierarchy JSON. Reconstruction
+   fidelity serves as an intrinsic measure of what the embedding retains. This task has
+   no counterpart in the original paper.
+2. **Screen-sequence prediction** (paper Table 3) — a jointly trained projector + LSTM
+   predicts the next screen in an interaction trace; evaluation is nearest-neighbour
+   retrieval under Screen2Vec's own population (`--strict`) and an n-back protocol.
+3. **Component prediction** (paper Table 2) — attempted (`10_`–`13_`), never finished
+   (the recorded run stops at epoch 11/120). **Out of the thesis**; kept as future work.
 
-The repository contains a full experimental pipeline, local trained checkpoints and embeddings, result notebooks, the authors' original Screen2Vec source under `screen2vec-master/`, and a text/HTML copy of the original publication under `screen2vec-paper/`. The canonical encoder identified in `CLAUDE.md` is the locally stored **Qwen3-VL-Embedding-8B** model; the additional Qwen 2.5 and Qwen 3.5 directories are experiment variants.
+## Evidence freeze
 
-## The central research idea
+**No further training will be executed.** The evidence base is what is recorded in the
+`_results_*` notebooks, plus exactly one pending run: the embedding-dimension sweep for
+sequence prediction (`4_sweep_embedding_dimensions.py`, running on a separate machine as
+of 2026-09-17). When its results land in `_results_dimension_sweep.ipynb`, the evidence
+is complete and a results manifest (`results.json`, extracted from the notebooks) becomes
+the only citable source of numbers for the thesis.
 
-The original paper treats a GUI screen somewhat like a word: screens that appear in the same interaction context should receive related embeddings. Its architecture is explicitly hierarchical. At component level, Sentence-BERT text embeddings and learned Android class embeddings are trained through a CBOW-style component-prediction task. At screen level, component embeddings, a learned 64-dimensional layout embedding, and a Sentence-BERT app-description embedding are combined. The final screen representation has 1,536 dimensions: 768 learned screen dimensions concatenated with 768 app-description dimensions.
+## Notebook map
 
-This repository keeps the useful self-supervised premise—interaction context provides supervision without manual labels—but replaces the narrow feature engineering with foundation-model representations of the complete cleaned UI. A Qwen model reads a multimodal prompt containing both the screenshot and compact view-hierarchy JSON. Hidden states from the foundation model become the screen embedding. Projectors, an LSTM, LoRA adapters, and language-model decoding then specialize those embeddings for the two downstream objectives.
+**Thesis evidence** (the record of the experiments; the manifest is extracted from these):
 
-In practical terms, the project asks whether a modern pretrained model can preserve a richer mixture of visual appearance, language, UI structure, and app semantics than the 2021 architecture, and whether that richer representation leads to more accurate next-screen retrieval and recoverable structured UI descriptions.
+| Notebook | Contents |
+|---|---|
+| `_results_reconstruction.ipynb` | Reconstruction scores per configuration, strict and repaired, positional and order-free metrics |
+| `_results_qwen3_correlation.ipynb` | The systematic 3×5 reconstruction grid — Qwen3-Base 0.6B/1.7B/4B × {4096_last, 4096_avg, 4×, 16×, 64×4096_avg} — rescored uniformly; primary metric: repaired unordered class F1; metric correlations |
+| `_results_reconstructions_boxplots.ipynb` | Score distributions; **includes a validation-only analysis** that reproduces the adapter's held-out split and rescoring on it |
+| `_results_reconstructions_viz.ipynb` | Wireframe renderings of best/median/worst reconstructions |
+| `_results_screen_observability.ipynb` | The observability scan: whitelist/blacklist derivation, threshold sensitivity, covariates |
+| `_results_sequence_prediction_s2v_strict.ipynb` | Table 3 under Screen2Vec's own population; no-app and with-app rows |
+| `_results_sequence_prediction_nback{1,2,3}.ipynb` | N-back protocol, K = 1..3; no-app and with-app rows |
+| `_results_dimension_sweep.ipynb` | Projection-dimension sweep D = 16…2048 (uniform hidden width 4096); **pending — awaiting the running sweep** |
+| `_results_component_prediction.ipynb` | The unfinished Track C attempt; no results |
+| `rico-metrics.ipynb` | Dataset statistics |
+
+**Paper artifacts (Jonathan's)** — made for the CHI submission, not thesis evidence;
+citable as reference material only: `_paper_*` (UMAP projections, cross-app nearest
+neighbours), `_category_*` (category embedding projections), `_pixel.ipynb` (live-device
+capture demo, with `pixel.py` / `pixel_idle.py` / `run_pixel.ps1`),
+`_hybrid_ui_reconstruction.ipynb` (mixing two screens' embeddings and decoding the
+mixture), `paper_embedding_analysis.py`.
 
 ## Data and preprocessing
 
-The work is built around RICO, which contains **66,261 unique Android screens from 9,384 apps** plus interaction traces. Each layout example normally has a screenshot (`.jpg`) and an Android view hierarchy (`.json`). The full dataset deliberately lives outside Git at `../rico-data/`: global layouts are under `data/layouts/`, filtered interaction traces under `data/traces/filtered_traces/`, and the local Qwen3-VL-Embedding-8B encoder under `models/`. Only a few small test examples live in `data/rico-examples/`.
+RICO: 66,261 unique screens (global ids 0..66260) from 9,384 apps, plus filtered
+interaction traces; lives outside the repo at `../rico-data/`. `utils.py` cleans each raw
+hierarchy into `{"app", "activity", "components"}`: invisible and zero-area nodes
+dropped, inert scaffolding unwrapped, visible containers kept as grouping nodes, bounds
+binned to 1–100. The minified string is both the encoder input and the reconstruction
+target; **touching the cleaner invalidates every embedding and adapter** (its sha256 is
+recorded in `screen_observability.meta.json`).
 
-`utils.py` converts raw RICO JSON into the stable compact object:
+Traces and layouts number screens in two different namespaces; they are joined by
+content hash in `trace_layout_index.csv` (66,157 of 66,261 mapped, 99.84%; 104 dropped;
+injective). Every trace-consuming stage refuses to run without the index. History and
+evidence: `REPLICATION_AUDIT.md`.
 
-```json
-{"app":"…","activity":"…","components":[…]}
-```
+## Screen observability (new since August)
 
-The cleaner does more than remove whitespace:
+`screen_observability.py` scans every screen for whether the cleaned hierarchy can
+describe the screenshot at all. Screens dominated by components that render outside the
+Android view system (WebView, video/GL surfaces, games, maps, ad containers) leave the
+JSON holding an opaque box where the pixels hold a page. At the chosen threshold (0.5
+opaque coverage): **whitelist 55,220 screens; blacklist 11,041** (10,872 opaque + 169
+empty). Outputs and per-category analyses in `graphics/screen_observability/`;
+reproducible via the recorded metadata. Whether the whitelist is the thesis's main
+scoring population is a decision for the writing phase.
 
-- It extracts package and short activity names from `activity_name`.
-- It discards invisible and zero-area nodes and prunes their subtrees.
-- It unwraps inert structural scaffolding such as `DecorView`, most `*Layout` classes, `ScrollView`, and `ViewPager`, while retaining visually meaningful containers such as cards, toolbars, lists, recyclers, and grids.
-- It removes empty bare `View`/`ViewGroup` spacer nodes.
-- It retains useful fields in stable order: class, non-empty text, accessibility content description, non-generic resource ID, `clickable` when true, normalized bounds, and cleaned children.
-- It maps pixel bounding boxes to integers from 1–100 relative to the device frame. This reduces token length and makes geometry resolution-independent.
-- It emits minified JSON for embedding and generation.
+## Track A — Reconstruction
 
-Changing this preprocessing changes the meaning of the learned embedding space, so the README correctly notes that embeddings and adapter training must be regenerated whenever the cleaning logic changes.
+Pipeline: `1_qwen_generate_embeddings.py` (one forward pass per screen; pooling into 1
+last-token or N average-pooled 4096-d vectors) → `2_train_adapter.py` (projector maps N
+vectors to N prefix tokens, max 128; LoRA on the decoder; targets over 4,096 tokens
+dropped, 0.44%) → `3_json_reconstruction[_par].py` (greedy decoding; strict scoring at
+generation time) → `repair_rescore.py` (json-repair + loop collapse; repaired scoring,
+kept separate from strict).
 
-## Foundation-model embedding pipeline
+Two eras of runs exist:
+- **The systematic grid** (current): Qwen3-Base decoders 0.6B / 1.7B / 4B × the five
+  representations above, rescored uniformly in `_results_qwen3_correlation.ipynb`.
+- **Earlier Qwen2.5/Qwen3.5-era runs** (recorded in `_results_reconstruction.ipynb`):
+  1×/4×/8× full-corpus with Qwen2.5-1.5B and others, and a 128×4096 run scored on a
+  ~50k subset. Kept for the capacity-vs-N story; the grid is the controlled comparison.
 
-`1_qwen_generate_embeddings.py` is the main encoder stage. Its principal model is the local Qwen3-VL-Embedding-8B foundation model. It feeds the cleaned JSON and screenshot to the model and saves hidden-state representations as `.npz` files keyed by the global RICO layout ID. The repository also contains experiments with Qwen 2.5 VL and Qwen 3.5 variants, token pooling, and several representation sizes.
+Scoring: JSON validity, sequence/Levenshtein similarity, app/activity match, positional
+class accuracy and box IoU, and order-free class precision/recall/F1 plus matched IoU —
+each strict and repaired. The boxplots notebook's validation-only section provides
+held-out-only statistics. Which decoder, which population (whitelist vs. full corpus),
+and which N-points form the thesis's headline curve are writing-phase decisions; the
+candidate facts are all recorded.
 
-The pooling design is important. A screen can be represented by one 4,096-dimensional last-token or average-pooled vector, or by multiple pooled prefix/token buckets such as `4x4096`, `8x4096`, `16x4096`, up to `128x4096`. Each bucket is independently L2-normalized. Multiple pooling widths can be produced from one model forward pass, but cannot safely be derived from each other afterward because adaptive pooling boundaries depend on the valid sequence length.
+## Track B — Screen-sequence prediction
 
-This yields two useful kinds of representations:
+Joint pipeline (`9_train_joint.py`): frozen 4096-d screen vectors → projector
+(4096→1024→D, default D=768, L2-normalised) → LSTM, trained with InfoNCE-style negatives;
+app-description vectors (`6_...py`: package name, name, category, scraped description for
+4,155 of 9,384 apps; SBERT all-mpnet-base-v2) concatenated for ranking only. Protocols
+are mutually exclusive and artefact-suffixed: permissive (superseded), `--strict`
+(Screen2Vec's population), `--nback K`.
 
-- A compact single vector, convenient for sequence prediction.
-- A sequence of soft-prefix vectors, which preserves more information for conditional JSON generation.
+Recorded headline results (details and caveats in the notebooks and
+`REPLICATION_AUDIT.md` §§2–3 — Top-1 and MRR are the informative columns):
 
-## Goal 1: interaction screen-sequence prediction
+| Protocol | Top-1 (with app) | MRR | Top-1 (no app) | Paper best |
+|---|---:|---:|---:|---:|
+| strict | 0.1182 | 0.2949 | 0.0697 | 0.061 |
+| n-back 1 | 0.2793 | 0.4568 | 0.1780 | — |
+| n-back 2 | 0.1650 | 0.3483 | 0.0890 | — |
+| n-back 3 | 0.0972 | 0.2824 | 0.0483 | — |
 
-### Trace-to-screen indexing
+**Pending:** the dimension sweep (D = 16…2048 at uniform hidden width 4096, seed-tagged
+artefacts, strict/n-back aware) — the last run of the project.
 
-The most important correctness work in this repository is `0_build_trace_index.py` and `trace_index.py`. RICO's layout corpus uses global IDs from 0 to 66,260, while trace view hierarchies use local per-trace IDs that restart in each trace. Earlier versions accidentally treated these as the same namespace. Because the integers existed in both places, the bug silently connected interaction traces to unrelated screens and produced an invalid Top-1 result of 0.5368.
+## Reporting rules (carried over, still in force)
 
-The corrected join hashes canonicalized JSON content. The primary key is SHA-1 over the complete document serialized with sorted keys and compact separators; an `activity.root` hash is a limited fallback. Matching is injective, so two trace screens cannot silently point to one layout embedding. Recorded coverage is:
-
-- 66,261 trace screens considered.
-- 66,157 mapped (99.84%).
-- 66,154 mapped through the full-document hash and 3 through the fallback.
-- 104 dropped rather than guessed.
-- Independent `activity_name` checks reached 1,200/1,200 agreement after the fix.
-
-`trace_layout_index.csv`, its metadata JSON, and the dropped-screen audit make the mapping reproducible. Trace-consuming stages refuse to run without the index, preventing reintroduction of the silent aliasing bug.
-
-### Learned sequence model
-
-The main current route is `9_train_joint.py`. It jointly trains:
-
-- A projector from the raw 4,096-dimensional Qwen screen representation through a 1,024-dimensional hidden layer to a normalized 768-dimensional screen vector.
-- A unidirectional LSTM that consumes up to four previous screen vectors and predicts the next screen vector.
-- A contrastive/InfoNCE-style objective using sampled negatives (recorded runs use temperature 0.07 and 128 negatives).
-
-The default 768-dimensional choice gives a direct comparison point with the learned 768-dimensional screen half of Screen2Vec. Separate scripts support a two-stage variant: `5_train_sequence_projector.py` learns the contrastive projector, and `8_train_lstm_predictor.py` subsequently trains the LSTM.
-
-`6_generate_app_context_embeddings.py` encodes Google Play descriptions using `sentence-transformers/all-mpnet-base-v2` and concatenates the normalized 768-dimensional app vector to the projected 768-dimensional screen vector. The result is 1,536-dimensional, matching the original paper's overall structure. Only the screen half is predicted by the LSTM; app context is added for retrieval. This avoids an avoidable norm mismatch and prevents the constant app vector from entering the recurrent prediction itself. The recorded metadata has full descriptions for 4,155 of 9,384 apps.
-
-The `nback` variants explicitly measure how many prior screens are supplied. Their recorded corrected results show the closest previous screen is especially informative:
-
-| Context | Prediction instances | Top-1 | Top-0.01% | Top-0.1% | Normalized RMSE |
-|---|---:|---:|---:|---:|---:|
-| Previous 1 screen | 55,881 | **0.2793** | 0.7713 | 0.9957 | 0.5626 |
-| Previous 2 screens | 47,354 | 0.1650 | 0.6955 | 0.9931 | 0.5839 |
-| Previous 3 screens | 40,190 | 0.0972 | 0.5811 | 0.9908 | 0.5710 |
-| Up to 4 screens, permissive | 54,518 | 0.0891 | 0.6453 | 0.9856 | 0.5987 |
-| Exactly 4, strict protocol | 34,140 | **0.1182** | 0.5004 | 0.9917 | 0.6028 |
-| Original Screen2Vec best row | paper protocol | 0.0610 | 0.2580 | 0.9690 | 0.8530 |
-
-The strict corrected run therefore raises headline Top-1 retrieval from **6.10% to 11.82%**, an absolute improvement of 5.72 points and roughly a **1.94× relative result**. The one-screen-context experiment reaches 27.93%, but it is a different prediction setting and should not be presented as an apples-to-apples Table 3 replacement.
-
-### What the evaluation actually means
-
-`4_evaluate_screen_prediction.py` performs nearest-neighbor retrieval against screen embeddings and reports Top-1, Top-0.01%, Top-0.1%, Top-1%, Top-5%, and normalized RMSE. The strict mode retains traces with at least five mapped screens, always uses exactly four context screens, restricts the candidate/negative pool to eligible trace screens, and uses the paper's integer truncation for percentage thresholds. The permissive mode admits traces with at least three screens and truncated 1–4-screen contexts.
-
-There are several crucial qualifications:
-
-- **Top-1 is the most meaningful paper-compatible metric.** Concatenated app descriptions effectively reveal app identity. Since a RICO app has only about 7.1 screens on average (median 5), app identity alone nearly saturates Top-0.1%, Top-1%, and Top-5%. A measured app-only oracle reaches 0.9968 at Top-0.1% and 1.0 at Top-1%. These columns say little about distinguishing screens within an app.
-- **Normalized RMSE should not be used for a direct “better than Screen2Vec” claim.** The original evaluates unnormalized, freely scaled vectors; this project evaluates normalized vectors. In the current geometry, RMSE is largely a restatement of cosine distance and has a different bound and interpretation.
-- **The original screen order cannot be exactly reproduced.** Released Screen2Vec preprocessing iterates an unsorted `os.listdir()` over numeric screen filenames. Its within-trace order is filesystem-dependent and not necessarily temporal. This project uses strictly ascending `gestures.json` order, which is the defensible next-screen task but differs from the original implementation.
-- **The published/released baselines are not perfectly controlled.** Screen2Vec rows receive the app-description half, while TextOnly/LayoutOnly/VisualOnly baselines in the released evaluator do not. The released `modeltester.py` also contains syntax/argument defects. Comparisons should be described as comparisons with the published numbers, not a bit-for-bit reproduction.
-
-The strongest future evaluation would add mean reciprocal rank, median rank, and especially **within-app rank/Top-k**, then split train/validation/test by app or trace to test generalization without app-identity shortcuts.
-
-## Goal 2: reconstructed JSON UI prediction
-
-### Model architecture
-
-`2_train_adapter.py` trains a LLaVA-style bridge from saved encoder embeddings into a causal language model decoder. The bridge/projector translates one or more 4,096-dimensional Qwen encoder vectors into the decoder's token-embedding space. A LoRA adapter then specializes the decoder to emit the cleaned JSON representation without fully fine-tuning the foundation model. Its optional `--fast` path is off by default so older sweeps remain bit-for-bit reproducible; it is intended to be arithmetically equivalent, not a different model definition.
-
-`3_json_reconstruction.py` and the parallel variant load the projector and LoRA weights, inject the projected screen representation as soft prefix embeddings, generate JSON autoregressively, and save both full outputs and extracted reconstructed objects. The single-process script currently pins the development-box GPU through `utils.CUDA_VISIBLE_DEVICE`; the parallel version instead selects each worker's device before initializing CUDA. The experiment directories show comparisons across pooling width and decoder family, including Qwen 2.5 1.5B and Qwen 3.5 2B/9B configurations.
-
-The conceptual bottleneck is deliberate: reconstruction tests whether the embedding is not merely useful for retrieval but retains enough detailed information to recover structured screen content. Increasing pooled-token count increases representation capacity, while creating a storage/compute trade-off.
-
-### Reconstruction metrics
-
-`reconstruction_metrics.py` evaluates more than exact string matching and applies the strict interpretation during generation: an unparseable prediction receives zero components, zero class accuracy, and zero IoU. `repair_rescore.py` separately reparses the raw response with `json_repair` and runs the same scoring functions. It is a standalone module because Windows multiprocessing workers must be able to import their functions. Recorded fields include:
-
-- Parseable JSON rate, plus parseability after `json-repair`.
-- Gestalt sequence similarity and normalized Levenshtein similarity over minified JSON.
-- Exact app and activity matches.
-- Ground-truth and predicted component counts.
-- Component class accuracy after pairing flattened components.
-- Mean bounding-box intersection-over-union (IoU) for paired components.
-- Execution time.
-
-Repair is reported separately because syntactically repairing a language-model response is useful operationally but must not be confused with native valid generation. Likewise, character similarity can reward superficial serialization overlap, while class accuracy and bounding-box IoU more directly measure reconstructing the UI.
-
-The aggregate notebook compares eight configurations. Some representative recorded means are:
-
-| Configuration | Native valid JSON | Valid after repair | Class accuracy after repair | Bounds IoU after repair | Levenshtein similarity after repair |
-|---|---:|---:|---:|---:|---:|
-| 1×4096 average, Qwen 2.5 1.5B | 0.6136 | 0.9729 | 0.2935 | 0.1953 | 0.4212 |
-| 4×4096 average, Qwen 2.5 1.5B | **0.8218** | 0.9735 | 0.3332 | 0.2252 | 0.4864 |
-| 4×4096 average, Qwen 3.5 9B | 0.7756 | 0.9917 | 0.2939 | 0.1868 | 0.4754 |
-| 8×4096 average, Qwen 2.5 1.5B | 0.7374 | 0.9740 | 0.3415 | 0.2255 | 0.4846 |
-| 128×4096 average, 50k subset | 0.6300 | **0.9983** | **0.4642** | **0.2674** | **0.5622** |
-
-These results show that reconstruction is functioning at corpus scale, but the objectives are not solved. The best structural figures still imply that more than half of paired classes are wrong and average box overlap is only about 0.27. The 128-prefix result is also based on 46,927/roughly 50k examples rather than the complete 66,261-screen run, so it should not be treated as a perfectly controlled winner. More prefix capacity improves detailed recovery in this experiment, while native JSON validity does not improve monotonically.
-
-There is no directly comparable JSON-reconstruction benchmark in the original Screen2Vec paper: the paper evaluates embeddings through component prediction, screen prediction/retrieval, composability, and task representations rather than decoding complete view-hierarchy JSON. Reconstruction is therefore a new downstream task and needs its own baselines, ablations, held-out test protocol, and human/semantic evaluation rather than a claim of beating an original reconstruction score.
-
-## Component-level reproduction
-
-Scripts `10_extract_components.py` through `13_evaluate_component_prediction.py` reproduce the spirit of the paper's Table 2 task using a modern text encoder and Transformer context predictor. The extracted corpus contains 66,092 usable screens, 1,518,766 components, 613,261 text-bearing components, and 198,263 unique component texts. `all-MiniLM-L6-v2` provides 384-dimensional vocabulary embeddings. Context consists of the 16 spatially or hierarchically closest other components; spatial features can include bounding boxes, sizes, and target-relative offsets.
-
-This implementation intentionally removes self-leakage found in the original code for screens with at most 16 components and uses a held-out validation split by default. Consequently, its scores are not automatically comparable to the paper's easier all-data evaluation. The checked-in notebook records an incomplete CPU training run, so this part appears less mature than the screen-sequence and reconstruction experiments.
-
-## Repository map
-
-- `0_build_trace_index.py`, `trace_index.py`: safe, reproducible trace/local-ID to layout/global-ID join.
-- `1_qwen_generate_embeddings.py`: multimodal Qwen embedding extraction and token pooling.
-- `2_train_adapter.py`: encoder-to-decoder projector plus LoRA reconstruction training.
-- `3_json_reconstruction.py`, `3_json_reconstruction_par.py`: single/parallel JSON generation.
-- `4_evaluate_screen_prediction.py`, parallel variant: retrieval-based next-screen evaluation.
-- `5_train_sequence_projector.py`: standalone contrastive screen projector.
-- `6_generate_app_context_embeddings.py`: SBERT app-description encoding and concatenation.
-- `deprecated_files/7_evaluate_weight_sweep.py`: retired screen/app weighting experiments (predates the trace-index fix).
-- `8_train_lstm_predictor.py`: standalone recurrent sequence predictor.
-- `9_train_joint.py`: preferred joint projector/LSTM sequence training.
-- `10_`–`13_`, `component_utils.py`: component-context prediction/Table 2 work.
-- `utils.py`: canonical RICO cleaning and shared model/data utilities.
-- `reconstruction_metrics.py`, `repair_rescore.py`: structural/textual reconstruction scoring and repair-aware rescoring.
-- `_results_*.ipynb`: recorded experiments and comparison tables.
-- `hpc/` and PowerShell pipeline files: cluster and local orchestration.
-- `screen2vec-master/`, `screen2vec-paper/`: original implementation and publication.
-
-## Environment, execution, and artifact conventions
-
-The development environment is Windows with a repository-local `.venv`; dependencies come from `requirements.txt`, including PyTorch from the CUDA 12.4 wheel index. `python check_gpu.py` checks CUDA availability. Tests are standard-library `unittest` tests and must be launched from the repository root because their fixtures use relative paths:
-
-```powershell
-python -m unittest tests.function_tests -v
-```
-
-There is currently no configured linter or formatter. The local PowerShell entry points are `_run_table2_pipeline.ps1` for component prediction, `_run_table3_pipeline1.ps1` for the two-stage sequence model, and `_run_table3_pipeline2.ps1` for the preferred joint sequence model. Multi-GPU adapter training uses the `accelerate`-based shell drivers rather than invoking `2_train_adapter.py` directly. The files under `hpc/` generate Slurm scripts from the development machine; `hpc/_hpc5_start_adapter_and_reconstruction.py` is the current chained train, sharded reconstruction, aggregation, and notification entry point.
-
-Large artifacts are intentionally ignored by Git. The numerous embedding, adapter, reconstruction, checkpoint, and image directories visible locally are experimental outputs rather than source-controlled inputs. Their names form part of the experiment metadata and should not be changed casually:
-
-- A single pooled vector uses `embeddings_4096_last` or `embeddings_4096_avg`; multiple vectors use `embeddings_<N>x4096_avg`.
-- Adapter output uses `adapter_model_out_<embedding-directory>_full_<model-slug>`.
-- Reconstruction output uses `reconstructions_<embeddings>__via__<adapter-name>`.
-- Each reconstruction directory contains `<idx>_reconstructed.json` and `<idx>_report.txt`, and `_results_reconstruction.ipynb` parses the directory name to identify the experiment.
-
-These conventions matter operationally: changing them can make a valid run invisible to the result notebooks or accidentally create a second, misleading experiment label.
-
-## Current state and recommended research claims
-
-The defensible headline is:
-
-> Using corrected RICO trace-to-layout alignment and true temporal interaction order, Qwen-derived screen representations with a jointly trained projector and LSTM achieve 11.82% Top-1 next-screen retrieval under the repository's strict Screen2Vec-like population, compared with 6.10% reported by Screen2Vec. A one-previous-screen variant reaches 27.93% in a different, explicitly labeled setting.
-
-The reconstruction headline should be framed independently:
-
-> A LLaVA-style projector and LoRA decoder can reconstruct compact JSON UI descriptions from Qwen screen embeddings across tens of thousands of RICO screens. The strongest recorded high-capacity run reaches 99.83% repaired JSON validity, 46.42% repaired component-class accuracy, and 26.74% repaired mean bounding-box IoU, leaving substantial room for improved structural fidelity.
-
-Claims to avoid are that every Table 3 metric is a clean semantic win, that normalized RMSE is directly comparable, that the obsolete 53.68% result is valid, or that JSON reconstruction beats an original Screen2Vec reconstruction benchmark. The repository's own analysis establishes why those claims would overstate the evidence.
-
-## Best next technical steps
-
-1. Establish an immutable train/validation/test split at the app level and publish the exact trace IDs, layout IDs, and hashes.
-2. Make within-app MRR, median rank, and Recall@k the primary sequence metrics; report global Top-1 only as a paper bridge.
-3. Compare temporal LSTM prediction with simple baselines: previous-screen nearest neighbor, transition-frequency lookup, app-only retrieval, GRU/Transformer sequence models, and frozen-foundation-model prompting.
-4. Ablate screenshot versus JSON input, foundation-model family/size, pooling width, app-description context, projector dimension, number of previous screens, and joint versus two-stage training.
-5. Strengthen JSON evaluation with tree-edit distance, key/value precision-recall, component matching via Hungarian assignment, per-class accuracy, text/content-description recovery, and IoU at multiple thresholds.
-6. Separate syntax from semantics by constraining decoding to the JSON schema or using grammar-guided generation, then report native validity, repaired validity, and semantic metrics independently.
-7. Add retrieval-then-generation and nearest-neighbor-copy reconstruction baselines. These reveal how much the decoder genuinely recovers from the embedding rather than memorizing common RICO templates.
-8. Complete the component-prediction experiment on held-out data and clearly distinguish it from the paper's self-leaking/all-data protocol.
-9. Record model revisions, seeds, checkpoint hashes, hardware, wall-clock time, peak memory, and energy use so the foundation-model accuracy improvement can be weighed against computational cost.
-
-Overall, this is an ambitious and technically substantive modernization of Screen2Vec. Its strongest contribution is not merely swapping in a newer model: it combines multimodal foundation embeddings, corrects a subtle but severe RICO indexing failure, defines true temporal prediction, exposes weaknesses in the original evaluation, and adds structured UI reconstruction as a demanding new test of representation quality.
+- Top-1 and MRR are the paper-comparable retrieval numbers; Top-0.01%–5% are saturated
+  by the app-description half (app-only oracle: 0.9968 at Top-0.1%) and are reported,
+  never headlined.
+- Normalised RMSE is not comparable to the paper's (unit-norm vs. free-scale vectors)
+  and is never claimed as a win.
+- Strict and repaired reconstruction scores are never mixed; repaired validity is an
+  operational number, not native generation quality.
+- Numbers from before the 2026-08-21 trace-index fix are void.
+- Reconstruction is currently scored corpus-wide including the adapter's training
+  screens; the validation-only analysis exists and its use is a writing-phase decision.
