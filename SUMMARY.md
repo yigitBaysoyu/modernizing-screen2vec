@@ -159,7 +159,7 @@ This implementation intentionally removes self-leakage found in the original cod
 - `4_evaluate_screen_prediction.py`, parallel variant: retrieval-based next-screen evaluation.
 - `5_train_sequence_projector.py`: standalone contrastive screen projector.
 - `6_generate_app_context_embeddings.py`: SBERT app-description encoding and concatenation.
-- `7_evaluate_weight_sweep.py`: screen/app weighting experiments.
+- `deprecated_files/7_evaluate_weight_sweep.py`: retired screen/app weighting experiments (predates the trace-index fix).
 - `8_train_lstm_predictor.py`: standalone recurrent sequence predictor.
 - `9_train_joint.py`: preferred joint projector/LSTM sequence training.
 - `10_`–`13_`, `component_utils.py`: component-context prediction/Table 2 work.
