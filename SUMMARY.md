@@ -25,12 +25,14 @@ retired:
 
 ## Evidence freeze
 
-**No further training will be executed.** The evidence base is what is recorded in the
-`_results_*` notebooks, plus exactly one pending run: the embedding-dimension sweep for
-sequence prediction (`4_sweep_embedding_dimensions.py`, running on a separate machine as
-of 2026-09-17). When its results land in `_results_dimension_sweep.ipynb`, the evidence
-is complete and a results manifest (`results.json`, extracted from the notebooks) becomes
-the only citable source of numbers for the thesis.
+**No further adapter training will be executed.** The evidence base is what is recorded in
+the `_results_*` notebooks. The embedding-dimension sweep landed on 2026-09-20 under the
+**permissive** protocol (hidden 1024 and 4096, 3 seeds each). Because only strict numbers may
+be compared with the paper, one last run is planned: a reduced **strict** sweep (hidden 1024;
+D = 16, 64, 256, 768; seeds 42–44; projector + LSTM only), which also records the no-app arm
+and gives the strict headline a seed error bar. When it lands, the evidence is complete; the
+thesis's results manifest (`results.json`, extracted from the notebooks) is the only citable
+source of numbers.
 
 ## Notebook map
 
@@ -45,7 +47,7 @@ the only citable source of numbers for the thesis.
 | `_results_screen_observability.ipynb` | The observability scan: whitelist/blacklist derivation, threshold sensitivity, covariates |
 | `_results_sequence_prediction_s2v_strict.ipynb` | Table 3 under Screen2Vec's own population; no-app and with-app rows |
 | `_results_sequence_prediction_nback{1,2,3}.ipynb` | N-back protocol, K = 1..3; no-app and with-app rows |
-| `_results_dimension_sweep.ipynb` | Projection-dimension sweep D = 16…2048 (uniform hidden width 4096); **pending — awaiting the running sweep** |
+| `_results_dimension_sweep.ipynb` | Projection-dimension sweeps: permissive (hidden 1024, D = 16…1024; hidden 4096, D = 16…2048; 3 seeds) — within-protocol only, paper row is orientation; strict (hidden 1024, D = 16/64/256/768, 3 seeds) — **planned**, the thesis figure. Includes the no-app arm where recorded |
 | `_results_component_prediction.ipynb` | The unfinished Track C attempt; no results |
 | `rico-metrics.ipynb` | Dataset statistics |
 
@@ -124,8 +126,12 @@ Recorded headline results (details and caveats in the notebooks and
 | n-back 2 | 0.1650 | 0.3483 | 0.0890 | — |
 | n-back 3 | 0.0972 | 0.2824 | 0.0483 | — |
 
-**Pending:** the dimension sweep (D = 16…2048 at uniform hidden width 4096, seed-tagged
-artefacts, strict/n-back aware) — the last run of the project.
+**Dimension sweep.** Permissive, 3 seeds: mean Top-1 stays between 0.080 and 0.114 and MRR
+between 0.270 and 0.295 from D = 16 to 2048, with seed SDs up to 0.029 — no detectable trend
+within seed noise; the hidden width (1024 vs. 4096) makes no difference beyond that noise.
+All 51 runs share one population (7,164 traces, 54,517 instances). These numbers are **not**
+comparable with the paper's Table 3 or with the strict headline. **Planned:** the reduced
+strict sweep described under "Evidence freeze", with the no-app arm.
 
 ## Reporting rules (carried over, still in force)
 

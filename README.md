@@ -100,19 +100,30 @@ screens; the two are mutually exclusive and their numbers are never comparable.
 ### Dimension sweep
 
 ```bash
-python 4_sweep_embedding_dimensions.py run --gpu 0                          # D = 16 ... 2048, hidden 4096
-python 4_sweep_embedding_dimensions.py run --hidden_dim 1024 --dims 16,32,64,128,256,512,768,1024
-python 4_sweep_embedding_dimensions.py run --protocol strict --dims 64,256,768
-python 4_sweep_embedding_dimensions.py run --dims 32,128,768 --seeds 42,43,44   # mean ± std
-python 4_sweep_embedding_dimensions.py plot
+# The thesis sweep: strict is the default protocol (Screen2Vec's own population).
+# D = 768 / seed 42 at the recipe width REUSES the canonical strict run if its checkpoints exist.
+python 4_sweep_embedding_dimensions.py run --hidden_dim 1024 --dims 16,64,256,768 --seeds 42,43,44 --gpu 0
+python 4_sweep_embedding_dimensions.py run --dims 768 --dry_run                 # print the commands
+python 4_sweep_embedding_dimensions.py plot --protocol permissive --hidden_dim 4096   # regenerate outputs
+# No-app arm for already recorded runs whose checkpoints still exist (evaluation only):
+python 4_sweep_embedding_dimensions.py noapp --protocol permissive --hidden_dim 1024 --gpu 0
 ```
 
-Runs the joint recipe once per projection dimension D and collects Top-1, Top-k%, MRR
-and nRMSE into `dimension_sweep/`. The default hidden width is 4096 for every point so
-only D varies (`--hidden_dim 1024` reproduces the recipe exactly up to D = 1024). Non-
-default widths and seeds get `_h<H>` / `_s<S>` artefact tags and never overwrite the
-canonical checkpoints. `_run_dimension_sweep.ps1` runs both intended configurations and
-executes `_results_dimension_sweep.ipynb`.
+Runs the joint recipe once per projection dimension D (and seed) and collects Top-1, Top-k%,
+MRR and nRMSE into `dimension_sweep/results{_proto}{_hH}.json`, with a table, CSV and figure.
+Each point is evaluated twice: with the app-description half (the Table 3 setting) and on the
+**screen vector alone** (`no_app`), because with the app half Top-1 is largely a choice among
+one app's screens. Non-default widths and seeds get `_h<H>` / `_s<S>` artefact tags and never
+overwrite the canonical checkpoints; `--force` refuses to retrain the canonical point
+(D = 768, recipe width, seed 42) unless `--force_canonical` is given.
+
+**Which sweep is which.** `results_strict.json` (hidden 1024; D = 16, 64, 256, 768; 3 seeds) is
+the thesis figure and the only one compared with the paper. `results.json` and
+`results_h4096.json` are **permissive** sweeps (hidden 1024 and 4096, 3 seeds): valid within
+their protocol — curve shape, hidden-width robustness — but their paper row is orientation
+only. Seed SD is the resolution of every sweep: smaller differences are "no detectable
+trend", not equality. `_run_dimension_sweep.sh` (Linux/Midas) and `_run_dimension_sweep.ps1`
+run the strict sweep, the no-app backfill and the notebook.
 
 ## Results
 

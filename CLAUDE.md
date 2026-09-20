@@ -17,9 +17,10 @@ model. RICO screens (screenshot + cleaned view hierarchy) are embedded with the 
 3. **Component prediction** (paper Table 2, `10_`–`13_`) — unfinished and retired; not
    part of the thesis.
 
-**Evidence freeze (2026-09):** no further training is executed. The only pending run is
-the dimension sweep (`4_sweep_embedding_dimensions.py`). Everything else is recorded in
-the `_results_*` notebooks — see the notebook map in `SUMMARY.md`.
+**Evidence freeze (2026-09):** no further adapter training is executed. The only pending
+run is the reduced *strict* dimension sweep (`4_sweep_embedding_dimensions.py`; the
+permissive sweeps landed 2026-09-20). Everything else is recorded in the `_results_*`
+notebooks — see the notebook map in `SUMMARY.md`.
 
 ## Environment and data
 
@@ -100,7 +101,11 @@ restricted to a list must cite which list and which meta hash.
 **Evaluation protocols are mutually exclusive flags.** `4_evaluate_screen_prediction.py`:
 permissive default (superseded), `--strict` (Screen2Vec's own population, `int()`
 thresholds), `--nback K`. Numbers from different protocols are never comparable and
-must be labelled.
+must be labelled. The paper's Table 3 is a strict-population result: only strict numbers
+are set next to it; the sweep script and its notebook enforce this (`reference_is_matched`).
+The sweep defaults to strict, evaluates every point with and without the app half
+(`no_app`), reuses the canonical D = 768 checkpoints rather than retraining them, and
+refuses `--force` on that point without `--force_canonical`.
 
 **`--fast` in `2_train_adapter.py` is off by default on purpose.** The default path is
 bit-for-bit the older code; `--fast` is arithmetically equivalent (see `FAST_PATH_NOTES`).

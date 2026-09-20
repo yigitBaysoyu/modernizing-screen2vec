@@ -49,14 +49,20 @@ every completed run.  Completed (dimension, seed) pairs are skipped on re-run
 (--force to redo).  Per-stage logs go to dimension_sweep/logs/ (gitignored).
 
 Usage:
-    # Default sweep (16 ... 2048, permissive protocol, seed 42, hidden 4096):
-    python 4_sweep_embedding_dimensions.py run --gpu 0
+    # Thesis sweep: Screen2Vec's own population (strict is the default protocol),
+    # recipe width, three seeds.  D=768 / seed 42 reuses the canonical strict run:
+    python 4_sweep_embedding_dimensions.py run --hidden_dim 1024 --dims 16,64,256,768 --seeds 42,43,44 --gpu 0
 
     # README recipe width (hidden 1024; D=768 is then the canonical run):
     python 4_sweep_embedding_dimensions.py run --hidden_dim 1024 --dims 16,32,64,128,256,512,768,1024
 
-    # Screen2Vec's own population, selected dimensions:
-    python 4_sweep_embedding_dimensions.py run --protocol strict --dims 64,256,768
+    # The superseded permissive protocol (within-protocol comparisons only; its
+    # numbers are NOT comparable to the paper's Table 3):
+    python 4_sweep_embedding_dimensions.py run --protocol permissive --dims 64,256,768
+
+    # Backfill the no-app arm (screen vector alone) for recorded runs whose
+    # artefacts still exist -- evaluation only, nothing is trained:
+    python 4_sweep_embedding_dimensions.py noapp --protocol permissive --hidden_dim 1024 --gpu 0
 
     # Seed repeats (mean +- std, error bars); non-42 intermediates are deleted
     # after their metrics are recorded unless --keep_artifacts:
@@ -94,6 +100,8 @@ DEFAULT_DIMS = (16, 32, 64, 128, 256, 512, 768, 1024, 2048)
 RECIPE_HIDDEN_DIM = 1024
 DEFAULT_HIDDEN_DIM = 4096
 RECIPE_SEED = 42
+# The README pipeline's own checkpoints are the D=768 artefacts with an empty tag.
+CANONICAL_DIM = 768
 RAW_EMBEDDINGS_DIR = "embeddings_4096_last"
 
 METRIC_KEYS = ("top1", "top001pct", "top01pct", "top1pct", "top5pct", "nrmse", "mrr")
@@ -151,6 +159,14 @@ def artifact_paths(dim: int, proto: str, tag: str) -> dict[str, str]:
         "projector": f"sequence_projector_{stem}.pth",
         "plot": f"joint_training_{stem}.png",
     }
+
+
+def is_canonical_point(dim: int, hidden_dim: int, seed: int) -> bool:
+    """True when a point's artefact names equal those of the README pipeline's
+    own checkpoints (e.g. lstm_predictor_768d_strict.pth, the run behind the
+    headline numbers).  Such a point is REUSED when the files exist, and must
+    never be silently retrained over."""
+    return dim == CANONICAL_DIM and artifact_tag(hidden_dim, seed) == ""
 
 
 class SweepPaths:
@@ -279,17 +295,48 @@ def run_label(dim: int, seed: int) -> str:
     return f"SWEEP_D{dim}_S{seed}"
 
 
+def noapp_label(dim: int, seed: int) -> str:
+    return f"SWEEP_D{dim}_S{seed}_NOAPP"
+
+
+def build_noapp_command(dim: int, args, seed: int) -> list[str]:
+    """Evaluation of the D-dimensional screen vectors WITHOUT the app-description
+    half: same LSTM, un-concatenated embeddings.  With the app half attached,
+    Top-1 is largely a choice among the screens of one app; this arm shows what
+    the screen vector achieves on its own."""
+    proto = protocol_suffix(args.protocol, args.nback)
+    art = artifact_paths(dim, proto, artifact_tag(args.hidden_dim, seed))
+    cmd = [sys.executable, STAGES["eval"],
+           "--embeddings_dir", art["emb_dir"], "--lstm_model", art["lstm"],
+           "--label", noapp_label(dim, seed), "--trace_index", args.trace_index,
+           *protocol_flags(args.protocol, args.nback)]
+    if getattr(args, "sample_fraction", None) is not None:
+        cmd += ["--sample_fraction", str(args.sample_fraction)]
+    return cmd
+
+
+def evaluate_no_app(dim: int, args, env: dict, paths: SweepPaths, seed: int) -> dict:
+    proto = protocol_suffix(args.protocol, args.nback)
+    stem = f"dim{dim}{proto}{artifact_tag(args.hidden_dim, seed)}"
+    log_path = run_stage(build_noapp_command(dim, args, seed), paths.logs / f"{stem}_4_eval_noapp.log", env)
+    metrics = parse_eval_metrics(log_path.read_text(encoding="utf-8"), noapp_label(dim, seed))
+    metrics["completed_at"] = datetime.now().isoformat(timespec="seconds")
+    return metrics
+
+
 def run_dimension(dim: int, args, env: dict, paths: SweepPaths, seed: int) -> dict:
-    """Recipe steps 1-3 for one (dimension, seed); returns the parsed metrics."""
+    """Recipe steps 1-3 (+ the no-app evaluation) for one (dimension, seed)."""
     proto = protocol_suffix(args.protocol, args.nback)
     art = artifact_paths(dim, proto, artifact_tag(args.hidden_dim, seed))
     commands = dict(build_commands(dim, args, seed))
     stem = f"dim{dim}{proto}{artifact_tag(args.hidden_dim, seed)}"
 
+    trained = True
     if os.path.isdir(art["emb_dir"]) and os.listdir(art["emb_dir"]) and os.path.exists(art["lstm"]) and not args.force:
-        print(f"    [skip] {art['emb_dir']}/ and {art['lstm']} already exist")
+        print(f"    [skip] {art['emb_dir']}/ and {art['lstm']} already exist -- reusing them")
+        trained = False
     else:
-        print(f"  [1/3] Joint projector + LSTM training (D={dim}, hidden {args.hidden_dim}, seed {seed})")
+        print(f"  [1/4] Joint projector + LSTM training (D={dim}, hidden {args.hidden_dim}, seed {seed})")
         run_stage(commands["train"], paths.logs / f"{stem}_1_train.log", env)
         if not os.path.exists(art["lstm"]):
             raise RuntimeError(f"Trainer finished but {art['lstm']} is missing")
@@ -297,15 +344,21 @@ def run_dimension(dim: int, args, env: dict, paths: SweepPaths, seed: int) -> di
     if os.path.isdir(art["app_dir"]) and os.listdir(art["app_dir"]) and not args.force:
         print(f"    [skip] {art['app_dir']}/ already exists")
     else:
-        print("  [2/3] App-description concatenation")
+        print("  [2/4] App-description concatenation")
         run_stage(commands["app"], paths.logs / f"{stem}_2_app.log", env)
 
-    print("  [3/3] Screen prediction evaluation")
+    print("  [3/4] Screen prediction evaluation (with the app-description half)")
     log_path = run_stage(commands["eval"], paths.logs / f"{stem}_3_eval.log", env)
     metrics = parse_eval_metrics(log_path.read_text(encoding="utf-8"), run_label(dim, seed))
     metrics["seed"] = seed
     metrics["completed_at"] = datetime.now().isoformat(timespec="seconds")
     metrics["artifacts"] = art
+    # False = the checkpoints already existed and were reused (for the canonical
+    # point this is the run behind the README / SUMMARY numbers).
+    metrics["trained_in_sweep"] = trained
+    if not args.skip_noapp:
+        print("  [4/4] Screen prediction evaluation (screen vector alone, no app half)")
+        metrics["no_app"] = evaluate_no_app(dim, args, env, paths, seed)
     return metrics
 
 
@@ -326,22 +379,45 @@ def cleanup_artifacts(dim: int, args, seed: int) -> None:
 # =============================================================================
 # Aggregation and outputs
 # =============================================================================
-def paper_reference() -> dict | None:
+# Screen2Vec Table 3, EUCLIDEAN-spatial -- used only when the evaluator (and its heavy
+# dependencies) cannot be imported, so that tables and figures do not depend on the machine.
+PAPER_FALLBACK = {"top1": 0.061, "top001pct": 0.258, "top01pct": 0.969, "top1pct": 0.998,
+                  "top5pct": 1.00, "nrmse": 0.853}
+
+
+def paper_reference() -> dict:
     """Screen2Vec's best Table 3 row, read from the evaluator so it has one home."""
     try:
         import importlib
         return importlib.import_module("4_evaluate_screen_prediction").PAPER_TABLE3["Screen2Vec-EUCLIDEAN-spatial"]
     except Exception:
-        return None
+        return dict(PAPER_FALLBACK)
 
 
-def seed_stats(results: dict) -> dict:
-    """Per-dimension mean / std / n over seeds, for every metric."""
+def reference_is_matched(meta: dict) -> bool:
+    """The paper's Table 3 was computed on the strict population.  Against any
+    other protocol its numbers are orientation only, never a comparison."""
+    return str(meta.get("protocol")) == "strict"
+
+
+REFERENCE_NOTE_MATCHED = "(Screen2Vec-EUCLIDEAN-spatial, paper; 768+768 dims)"
+REFERENCE_NOTE_UNMATCHED = ("(Screen2Vec-EUCLIDEAN-spatial, paper, STRICT population; "
+                            "not protocol-matched, orientation only)")
+
+
+def seed_stats(results: dict, arm: str | None = None) -> dict:
+    """Per-dimension mean / std / n over seeds, for every metric.  arm=None is
+    the with-app evaluation; arm="no_app" the screen vector alone (dimensions
+    without that arm are omitted)."""
     stats = {}
     for dim_key, by_seed in results["runs"].items():
-        entry = {"n": len(by_seed)}
+        rows = [m if arm is None else m.get(arm) for m in by_seed.values()]
+        rows = [r for r in rows if r]
+        if not rows:
+            continue
+        entry = {"n": len(rows)}
         for key in METRIC_KEYS:
-            values = [m[key] for m in by_seed.values() if key in m and m[key] == m[key]]
+            values = [r[key] for r in rows if key in r and r[key] == r[key]]
             entry[key] = {
                 "mean": statistics.mean(values) if values else float("nan"),
                 "std": statistics.stdev(values) if len(values) > 1 else 0.0,
@@ -352,11 +428,24 @@ def seed_stats(results: dict) -> dict:
 
 def write_table(paths: SweepPaths, results: dict) -> str:
     stats = seed_stats(results)
+    noapp = seed_stats(results, "no_app")
     ref = paper_reference()
     meta = results.get("meta", {})
-    multi = any(s["n"] > 1 for s in stats.values())
+    multi = any(s["n"] > 1 for s in (*stats.values(), *noapp.values()))
     col = 15 if multi else 10
     header = f"{'dim':>6} {'n':>3} " + " ".join(f"{METRIC_LABELS[k]:>{col}}" for k in METRIC_KEYS)
+
+    def block(block_stats: dict) -> list[str]:
+        rows = []
+        for dim_key in sorted(block_stats, key=int):
+            s = block_stats[dim_key]
+            if multi:
+                cells = " ".join(f"{s[k]['mean']:.4f}+-{s[k]['std']:.4f}".rjust(col) for k in METRIC_KEYS)
+            else:
+                cells = " ".join(f"{s[k]['mean']:>{col}.4f}" for k in METRIC_KEYS)
+            rows.append(f"{dim_key:>6} {s['n']:>3} {cells}")
+        return rows
+
     lines = [
         "Embedding-dimension sweep - GUI Screen Prediction (joint recipe: 9_ -> 6_ -> 4_)",
         f"protocol={meta.get('protocol', '?')}  hidden_dim={meta.get('hidden_dim', '?')}  "
@@ -364,20 +453,25 @@ def write_table(paths: SweepPaths, results: dict) -> str:
         "Final embedding per point = D screen dims + 768 app-description dims",
         "Top-1 and MRR are the informative columns; Top-0.1% and above are saturated by app identity,",
         "and Norm.RMSE is not comparable to the paper's (REPLICATION_AUDIT.md 2-3).",
-        "=" * len(header), header, "-" * len(header),
     ]
-    for dim_key in sorted(stats, key=int):
-        s = stats[dim_key]
-        if multi:
-            cells = " ".join(f"{s[k]['mean']:.4f}+-{s[k]['std']:.4f}".rjust(col) for k in METRIC_KEYS)
-        else:
-            cells = " ".join(f"{s[k]['mean']:>{col}.4f}" for k in METRIC_KEYS)
-        lines.append(f"{dim_key:>6} {s['n']:>3} {cells}")
+    if multi:
+        lines.append("The seed SD is the resolution of this sweep: a difference between two dimensions that is")
+        lines.append("smaller than it is not detected -- 'no detectable trend', not 'equal'.")
+    lines += ["=" * len(header), header, "-" * len(header), *block(stats)]
     if ref:
+        note = REFERENCE_NOTE_MATCHED if reference_is_matched(meta) else REFERENCE_NOTE_UNMATCHED
         lines.append("-" * len(header))
         cells = " ".join((f"{ref[k]:.4f}" if k in ref else "n/a").rjust(col) for k in METRIC_KEYS)
-        lines.append(f"{'S2V':>6} {'':>3} {cells}   (Screen2Vec-EUCLIDEAN-spatial, paper; 768+768 dims)")
+        lines.append(f"{'S2V':>6} {'':>3} {cells}   {note}")
     lines.append("=" * len(header))
+    if noapp:
+        lines += [
+            "",
+            "Without the app-description half: the D-dimensional screen vector alone (same LSTM, same population).",
+            "No paper counterpart -- Screen2Vec's Table 3 always includes the app half. With the app half, Top-1 is",
+            "largely a choice among the screens of one app; this arm shows what the screen vector does by itself.",
+            "=" * len(header), header, "-" * len(header), *block(noapp), "=" * len(header),
+        ]
     table = "\n".join(lines)
     paths.table.write_text(table + "\n", encoding="utf-8")
     return table
@@ -392,6 +486,8 @@ def write_csv(paths: SweepPaths, results: dict) -> None:
             row = {"proj_dim": int(dim_key), "seed": int(seed_key)}
             row.update({k: m.get(k) for k in METRIC_KEYS})
             row.update({k: m.get(k) for k in POPULATION_KEYS})
+            row.update({f"noapp_{k}": (m.get("no_app") or {}).get(k) for k in METRIC_KEYS})
+            row["trained_in_sweep"] = m.get("trained_in_sweep")
             row["completed_at"] = m.get("completed_at")
             rows.append(row)
     rows.sort(key=lambda r: (r["proj_dim"], r["seed"]))
@@ -407,11 +503,13 @@ def write_figure(paths: SweepPaths, results: dict) -> None:
     import matplotlib.pyplot as plt
 
     stats = seed_stats(results)
+    noapp = seed_stats(results, "no_app")
     dims = sorted(int(k) for k in stats)
     if not dims:
         return
     ref = paper_reference()
     meta = results.get("meta", {})
+    matched = reference_is_matched(meta)
     n_values = [stats[str(d)]["n"] for d in dims]
     n_text = f"n={min(n_values)}" if min(n_values) == max(n_values) else f"n={min(n_values)}-{max(n_values)}"
 
@@ -427,19 +525,27 @@ def write_figure(paths: SweepPaths, results: dict) -> None:
         for side in ("top", "right"):
             ax.spines[side].set_visible(False)
 
-    def curve(ax, key, color, label):
-        ys = [stats[str(d)][key]["mean"] for d in dims]
-        es = [stats[str(d)][key]["std"] for d in dims]
-        ax.errorbar(dims, ys, yerr=es if max(n_values) > 1 else None, color=color,
-                    linewidth=2, marker="o", markersize=4, capsize=3, label=label)
-        if ref and key in ref:
+    def curve(ax, key, color, label, source=stats, reference=True, **style):
+        xs = sorted(int(k) for k in source)
+        ys = [source[str(d)][key]["mean"] for d in xs]
+        es = [source[str(d)][key]["std"] for d in xs]
+        ax.errorbar(xs, ys, yerr=es if max(n_values) > 1 else None, color=color,
+                    linewidth=2, marker="o", markersize=4, capsize=3, label=label, **style)
+        # The paper line is a comparison only under the strict protocol.
+        if reference and matched and ref and key in ref:
             ax.axhline(ref[key], color=color, linewidth=1.2, linestyle=(0, (4, 3)), alpha=0.6)
 
     curve(ax_main, "top1", "#2a78d6", "Top-1")
     curve(ax_main, "mrr", "#d1495b", "MRR (no paper value)")
+    if noapp:
+        curve(ax_main, "top1", "#2a78d6", "Top-1, screen vector alone", source=noapp, reference=False,
+              linestyle=":", alpha=0.75)
+        curve(ax_main, "mrr", "#d1495b", "MRR, screen vector alone", source=noapp, reference=False,
+              linestyle=":", alpha=0.75)
     ax_main.set_ylim(0, None)
     ax_main.set_ylabel("Retrieval quality")
-    ax_main.set_title(f"Informative metrics (dashed = Screen2Vec-spatial, paper; {n_text} seeds)", loc="left", fontsize=10)
+    ref_text = "dashed = Screen2Vec-spatial, paper" if matched else "paper row omitted: not protocol-matched"
+    ax_main.set_title(f"Informative metrics ({ref_text}; {n_text} seeds)", loc="left", fontsize=10)
     ax_main.legend(frameon=False, fontsize=9, loc="lower right")
 
     curve(ax_sat, "top001pct", "#1baf7a", "Top-0.01%")
@@ -475,9 +581,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="mode", required=True)
 
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--protocol", choices=("permissive", "strict", "nback"), default="permissive",
-                        help="Evaluation protocol, passed to BOTH the trainer and the evaluator "
-                             "(default: permissive, the README recipe). See 4_evaluate_screen_prediction.py.")
+    common.add_argument("--protocol", choices=("permissive", "strict", "nback"), default="strict",
+                        help="Evaluation protocol, passed to BOTH the trainer and the evaluator. Default: "
+                             "strict, Screen2Vec's own population and the only protocol whose numbers may be "
+                             "compared with the paper's Table 3 (permissive is superseded, see CLAUDE.md).")
     common.add_argument("--nback", type=int, default=None, metavar="K",
                         help="Context length for --protocol nback")
     common.add_argument("--hidden_dim", type=int, default=DEFAULT_HIDDEN_DIM,
@@ -486,22 +593,36 @@ def build_parser() -> argparse.ArgumentParser:
                              "swept dimension. Widths other than the recipe's write _h<H>-suffixed "
                              "artefacts and results.")
 
-    run_p = sub.add_parser("run", parents=[common], help="Run the sweep (resumable)")
+    stages = argparse.ArgumentParser(add_help=False)
+    stages.add_argument("--gpu", type=str, default=None, help="CUDA_VISIBLE_DEVICES for the stages")
+    stages.add_argument("--trace_index", type=str, default=trace_index.DEFAULT_INDEX_PATH,
+                        help="Trace->layout index from 0_build_trace_index.py (required by every stage)")
+    stages.add_argument("--sample_fraction", type=float, default=None,
+                        help="NON-RECIPE, plumbing tests only: evaluate on a fraction of traces")
+    stages.add_argument("--dry_run", action="store_true", help="Print the stage commands and exit")
+
+    run_p = sub.add_parser("run", parents=[common, stages], help="Run the sweep (resumable)")
     run_p.add_argument("--dims", type=str, default=",".join(str(d) for d in DEFAULT_DIMS),
                        help="Comma-separated projection dimensions")
     run_p.add_argument("--seeds", type=str, default=str(RECIPE_SEED),
                        help="Comma-separated seeds; more than one gives mean +- std and error bars")
-    run_p.add_argument("--gpu", type=str, default=None, help="CUDA_VISIBLE_DEVICES for the stages")
     run_p.add_argument("--embeddings_dir", type=str, default=RAW_EMBEDDINGS_DIR,
                        help=f"Raw pooled Qwen embeddings (default: {RAW_EMBEDDINGS_DIR})")
-    run_p.add_argument("--trace_index", type=str, default=trace_index.DEFAULT_INDEX_PATH,
-                       help="Trace->layout index from 0_build_trace_index.py (required by every stage)")
-    run_p.add_argument("--sample_fraction", type=float, default=None,
-                       help="NON-RECIPE, plumbing tests only: evaluate on a fraction of traces")
     run_p.add_argument("--force", action="store_true", help="Re-run (dimension, seed) pairs already recorded")
+    run_p.add_argument("--force_canonical", action="store_true",
+                       help="Allow --force to retrain a point whose artefact names are the README "
+                            "pipeline's own checkpoints (D=768, recipe width, seed 42). This OVERWRITES "
+                            "the run behind the headline numbers; refused without this flag.")
+    run_p.add_argument("--skip_noapp", action="store_true",
+                       help="Skip the additional evaluation of the screen vector alone (no app half)")
     run_p.add_argument("--keep_artifacts", action="store_true",
                        help="Keep non-42-seed intermediates instead of deleting them after recording")
-    run_p.add_argument("--dry_run", action="store_true", help="Print the stage commands and exit")
+
+    noapp_p = sub.add_parser("noapp", parents=[common, stages],
+                             help="Backfill the no-app arm for recorded runs whose artefacts still exist "
+                                  "(evaluation only; nothing is trained)")
+    noapp_p.add_argument("--dims", type=str, default=None, help="Restrict to these dimensions (default: all recorded)")
+    noapp_p.add_argument("--seeds", type=str, default=None, help="Restrict to these seeds (default: all recorded)")
 
     sub.add_parser("plot", parents=[common], help="Regenerate table, CSV and figure from the results file")
     return parser
@@ -512,6 +633,59 @@ def validate(args, parser) -> None:
         parser.error("--protocol nback requires --nback K with K >= 1")
     if args.protocol != "nback" and args.nback is not None:
         parser.error("--nback only applies to --protocol nback")
+
+
+def stage_env(args) -> dict:
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
+    if args.gpu is not None:
+        env["CUDA_VISIBLE_DEVICES"] = args.gpu
+    return env
+
+
+def backfill_noapp(args, paths: SweepPaths) -> None:
+    """The no-app arm for every recorded run that lacks it and whose checkpoints
+    still exist.  Non-42 seeds are cleaned up after recording (unless the sweep
+    ran with --keep_artifacts), so typically only the seed-42 points qualify."""
+    results = load_results(paths)
+    if not results["runs"]:
+        print(f"No results in {paths.results}; run the sweep first.")
+        return
+    only_dims = {int(d) for d in args.dims.split(",")} if args.dims else None
+    only_seeds = {int(s) for s in args.seeds.split(",")} if args.seeds else None
+    proto = protocol_suffix(args.protocol, args.nback)
+    todo, missing = [], []
+    for dim_key in sorted(results["runs"], key=int):
+        for seed_key, metrics in sorted(results["runs"][dim_key].items(), key=lambda kv: int(kv[0])):
+            dim, seed = int(dim_key), int(seed_key)
+            if (only_dims and dim not in only_dims) or (only_seeds and seed not in only_seeds):
+                continue
+            if metrics.get("no_app"):
+                continue
+            art = artifact_paths(dim, proto, artifact_tag(args.hidden_dim, seed))
+            if os.path.isdir(art["emb_dir"]) and os.listdir(art["emb_dir"]) and os.path.exists(art["lstm"]):
+                todo.append((dim, seed))
+            else:
+                missing.append((dim, seed))
+    print(f"[*] no-app backfill for {paths.results}: {len(todo)} run(s) to evaluate, "
+          f"{len(missing)} without artefacts (cleaned up; would need retraining): {missing or '-'}")
+    if args.dry_run:
+        for dim, seed in todo:
+            print("  " + " ".join(build_noapp_command(dim, args, seed)))
+        return
+    if todo and not Path(args.trace_index).exists():
+        raise SystemExit(f"{args.trace_index} missing; run 0_build_trace_index.py first")
+    env = stage_env(args)
+    for i, (dim, seed) in enumerate(todo, 1):
+        print(f"\n[{i}/{len(todo)}] D={dim} seed={seed}: screen vector alone  ({datetime.now().strftime('%H:%M:%S')})")
+        try:
+            results["runs"][str(dim)][str(seed)]["no_app"] = evaluate_no_app(dim, args, env, paths, seed)
+        except RuntimeError as exc:
+            print(f"  [-] FAILED: {exc}")
+            continue
+        save_results(paths, results)
+        refresh_outputs(paths, results)
+    print("\n[*] No-app backfill finished.")
 
 
 def main(argv=None) -> None:
@@ -528,6 +702,10 @@ def main(argv=None) -> None:
         refresh_outputs(paths, results)
         return
 
+    if args.mode == "noapp":
+        backfill_noapp(args, paths)
+        return
+
     dims = [int(d) for d in args.dims.split(",") if d.strip()]
     seeds = [int(s) for s in args.seeds.split(",") if s.strip()]
     if max(dims) > args.hidden_dim:
@@ -535,12 +713,23 @@ def main(argv=None) -> None:
                      f"rank-limited by its hidden layer; use --hidden_dim >= {max(dims)}")
     jobs = [(dim, seed) for dim in dims for seed in seeds]
 
+    canonical = [(d, s) for d, s in jobs if is_canonical_point(d, args.hidden_dim, s)]
+    if args.force and canonical and not args.force_canonical:
+        art = artifact_paths(canonical[0][0], protocol_suffix(args.protocol, args.nback), "")
+        raise SystemExit(
+            f"--force would retrain {canonical}, whose artefacts ({art['emb_dir']}/, {art['lstm']}) are the "
+            "README pipeline's own checkpoints -- the run behind the headline numbers. Drop --force (the "
+            "point is then reused), exclude it, or pass --force_canonical if you really mean it.")
+
     if args.dry_run:
         print(f"[dry run] protocol={args.protocol} hidden_dim={args.hidden_dim} -> {paths.results}")
         for dim, seed in jobs:
-            print(f"\n# D={dim} seed={seed}")
+            print(f"\n# D={dim} seed={seed}" + ("   [canonical point: reused if its checkpoints exist]"
+                                                if (dim, seed) in canonical else ""))
             for _, cmd in build_commands(dim, args, seed):
                 print("  " + " ".join(cmd))
+            if not args.skip_noapp:
+                print("  " + " ".join(build_noapp_command(dim, args, seed)))
         return
 
     if not Path(args.trace_index).exists():
@@ -549,11 +738,7 @@ def main(argv=None) -> None:
         if not Path(script).exists():
             raise SystemExit(f"{script} not found; run from the repository root")
 
-    env = os.environ.copy()
-    env["PYTHONUNBUFFERED"] = "1"
-    if args.gpu is not None:
-        env["CUDA_VISIBLE_DEVICES"] = args.gpu
-
+    env = stage_env(args)
     results = load_results(paths)
     results["meta"] = {
         "recipe": "9_train_joint.py -> 6_generate_app_context_embeddings.py -> 4_evaluate_screen_prediction.py",

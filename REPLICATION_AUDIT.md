@@ -242,13 +242,20 @@ Our default was more permissive than `modeltester.py`. Both are now available.
 | top-k% rounding | `ceil()` | `int()` | `int()` (`modeltester.py:141`) |
 | training negatives | any screen | eligible screens | `ScreenVocab` = filtered dataset |
 | screen order | temporal | temporal | arbitrary (finding #4) |
+| traces of apps without a Play Store description | kept (fallback text or zero vector) | kept (fallback text or zero vector) | **dropped**: a trace is kept only if `d != ""` (`dataset.py:67,166`); the scraper stored `''` on failure (`UI_embedding/precompute_embeddings.py:59-61`) |
 
 Under the permissive setting, 37.4% of evaluation instances ran on a truncated context the
 original never evaluates, and training zero-padded those short contexts while evaluation
 did not — a train/test mismatch that `--strict` removes by construction.
 
-`--strict` is off by default everywhere; the default path is byte-identical to before it
-was added.
+`--strict` is off by default in the stage scripts (`4_`, `5_`, `8_`, `9_`); their default path is
+byte-identical to before it was added. The dimension sweep (`4_sweep_embedding_dimensions.py`)
+defaults to strict, because only strict numbers may be set next to the paper's Table 3.
+
+The description filter is the one part of Screen2Vec's population that `--strict` does not
+reproduce, and it cannot be: which apps had an empty description depends on the authors' 2020
+Play Store scrape. Our strict population is therefore a superset of theirs by an unknown
+number of traces. Like the screen order, this is a documented difference, not a fixable one.
 
 ---
 

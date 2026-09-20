@@ -3,6 +3,8 @@ protocol=permissive  hidden_dim=1024  raw=embeddings_4096_last  seeds=[42, 43, 4
 Final embedding per point = D screen dims + 768 app-description dims
 Top-1 and MRR are the informative columns; Top-0.1% and above are saturated by app identity,
 and Norm.RMSE is not comparable to the paper's (REPLICATION_AUDIT.md 2-3).
+The seed SD is the resolution of this sweep: a difference between two dimensions that is
+smaller than it is not detected -- 'no detectable trend', not 'equal'.
 ==========================================================================================================================
    dim   n           Top-1       Top-0.01%        Top-0.1%          Top-1%          Top-5%       Norm.RMSE             MRR
 --------------------------------------------------------------------------------------------------------------------------
@@ -15,5 +17,5 @@ and Norm.RMSE is not comparable to the paper's (REPLICATION_AUDIT.md 2-3).
    768   3  0.0900+-0.0061  0.6507+-0.0013  0.9886+-0.0013  0.9982+-0.0004  0.9999+-0.0000  0.5852+-0.0135  0.2788+-0.0037
   1024   3  0.1140+-0.0135  0.6471+-0.0013  0.9885+-0.0009  0.9986+-0.0002  0.9999+-0.0001  0.6252+-0.0079  0.2953+-0.0100
 --------------------------------------------------------------------------------------------------------------------------
-   S2V              0.0610          0.2580          0.9690          0.9980          1.0000          0.8530             n/a   (Screen2Vec-EUCLIDEAN-spatial, paper; 768+768 dims)
+   S2V              0.0610          0.2580          0.9690          0.9980          1.0000          0.8530             n/a   (Screen2Vec-EUCLIDEAN-spatial, paper, STRICT population; not protocol-matched, orientation only)
 ==========================================================================================================================

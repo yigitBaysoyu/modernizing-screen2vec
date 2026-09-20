@@ -363,9 +363,13 @@ class TestDimensionSweep(unittest.TestCase):
         self.assertNotIn("--strict", commands["app"])
         # Default width is 4096 so that D=2048 fits; it tags every artefact uniformly.
         default_args = parser.parse_args(["run", "--dims", "2048"])
+        self.assertEqual(default_args.protocol, "strict")
         default_cmds = dict(self.sweep.build_commands(2048, default_args, 42))
         self.assertEqual(default_cmds["train"][default_cmds["train"].index("--hidden_dim") + 1], "4096")
-        self.assertIn("lstm_predictor_2048d_h4096.pth", default_cmds["eval"])
+        self.assertIn("--strict", default_cmds["train"])
+        self.assertIn("lstm_predictor_2048d_strict_h4096.pth", default_cmds["eval"])
+        permissive = parser.parse_args(["run", "--protocol", "permissive", "--dims", "2048"])
+        self.assertIn("lstm_predictor_2048d_h4096.pth", dict(self.sweep.build_commands(2048, permissive, 42))["eval"])
         self.assertEqual(self.sweep.DEFAULT_DIMS[0], 16)
         self.assertEqual(self.sweep.DEFAULT_DIMS[-1], 2048)
 
@@ -407,3 +411,55 @@ class TestDimensionSweep(unittest.TestCase):
             self.sweep.write_figure(paths, results)
             self.assertTrue(paths.figure.exists())
             self.assertEqual(len(paths.csv.read_text(encoding="utf-8").strip().splitlines()), 4)
+
+    def test_noapp_command_uses_unconcatenated_embeddings(self):
+        parser = self.sweep.build_parser()
+        args = parser.parse_args(["run", "--hidden_dim", "1024", "--dims", "64", "--seeds", "43"])
+        cmd = self.sweep.build_noapp_command(64, args, 43)
+        self.assertEqual(cmd[cmd.index("--embeddings_dir") + 1], "embeddings_seq_64_strict_s43")
+        self.assertNotIn("embeddings_seq_64_strict_s43_with_app", cmd)
+        self.assertEqual(cmd[cmd.index("--label") + 1], "SWEEP_D64_S43_NOAPP")
+        self.assertIn("--strict", cmd)
+        # the with-app label must not match the no-app row and vice versa
+        text = "SWEEP_D64_S43_NOAPP   0.0500 0.2000 0.6000 0.9000 0.9700 0.8500\n  MRR 0.1200\n"
+        self.assertAlmostEqual(self.sweep.parse_eval_metrics(text, "SWEEP_D64_S43_NOAPP")["top1"], 0.05)
+        with self.assertRaises(RuntimeError):
+            self.sweep.parse_eval_metrics(text, "SWEEP_D64_S43")
+
+    def test_canonical_point_and_force_guard(self):
+        self.assertTrue(self.sweep.is_canonical_point(768, 1024, 42))
+        self.assertFalse(self.sweep.is_canonical_point(768, 4096, 42))
+        self.assertFalse(self.sweep.is_canonical_point(768, 1024, 43))
+        self.assertFalse(self.sweep.is_canonical_point(64, 1024, 42))
+        with self.assertRaises(SystemExit) as ctx:
+            self.sweep.main(["run", "--hidden_dim", "1024", "--dims", "64,768", "--seeds", "42", "--force", "--dry_run"])
+        self.assertIn("lstm_predictor_768d_strict.pth", str(ctx.exception))
+        # not canonical -> --force is allowed (dry run prints and returns)
+        self.sweep.main(["run", "--hidden_dim", "1024", "--dims", "64", "--seeds", "42", "--force", "--dry_run"])
+
+    def test_reference_row_is_protocol_aware_and_noapp_block(self):
+        base = {"top001pct": 0.5, "top01pct": 0.99, "top1pct": 1.0, "top5pct": 1.0, "nrmse": 0.6,
+                "n_traces": 10, "n_screens_in_traces": 50, "n_instances": 30, "completed_at": "now"}
+        noapp = dict(base, top1=0.04, mrr=0.10, top01pct=0.6)
+        runs = {"64": {"42": dict(base, top1=0.10, mrr=0.20, seed=42, no_app=noapp, trained_in_sweep=True),
+                       "43": dict(base, top1=0.12, mrr=0.22, seed=43, trained_in_sweep=True)}}
+        with tempfile.TemporaryDirectory() as directory:
+            for protocol, matched in (("permissive", False), ("strict", True)):
+                paths = self.sweep.SweepPaths(protocol, None, 1024, sweep_dir=Path(directory))
+                results = {"meta": {"protocol": protocol, "hidden_dim": 1024, "seeds": [42, 43]}, "runs": runs}
+                self.assertEqual(self.sweep.reference_is_matched(results["meta"]), matched)
+                table = self.sweep.write_table(paths, results)
+                self.assertEqual("not protocol-matched" in table, not matched)
+                self.assertIn("Without the app-description half", table)
+                self.assertIn("no detectable trend", table)
+                self.sweep.write_csv(paths, results)
+                header, first = paths.csv.read_text(encoding="utf-8").splitlines()[:2]
+                self.assertIn("noapp_top1", header)
+                self.assertIn("trained_in_sweep", header)
+                self.assertIn("0.04", first)
+                self.sweep.write_figure(paths, results)
+                self.assertTrue(paths.figure.exists())
+            stats = self.sweep.seed_stats(results, "no_app")
+            self.assertEqual(stats["64"]["n"], 1)
+            self.assertAlmostEqual(stats["64"]["top1"]["mean"], 0.04)
+
