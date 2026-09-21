@@ -28,7 +28,7 @@ agreed with the authors, and the thesis's results manifest must be regenerated.
   requirements.txt` pulls the CUDA 12.4 torch index). Analysis notebooks also run on
   macOS/CPU. `python check_gpu.py` verifies CUDA.
 - **RICO lives outside the repo** at `../rico-data/`: `data/layouts/<id>.json|.jpg`
-  (66,261 screens, global ids `0..66260`), `data/traces/filtered_traces/<app>/<trace>/`,
+  (66,261 screens; global ids are NOT contiguous: they range over `0..72218` with gaps, so completeness is checked by comparing id sets, never by counting up to 66,260), `data/traces/filtered_traces/<app>/<trace>/`,
   and `models/Qwen3-VL-Embedding-8B`. `data/rico-examples/` holds test screens.
 - Nothing large is committed: `*.pth`, `embeddings*/`, `adapter_model_out*/`,
   `reconstructions*/`, `dimension_sweep/`, images. Experiment artefacts live on the

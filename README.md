@@ -23,7 +23,7 @@ python -m unittest tests.function_tests -v   # from the repo root
 ```
 
 RICO lives outside the repo at `../rico-data/`: `data/layouts/<id>.json|.jpg` (66,261
-screens, global ids `0..66260`), `data/traces/filtered_traces/<app>/<trace>/`, and the
+screens; global ids are not contiguous — they range over `0..72218` with gaps), `data/traces/filtered_traces/<app>/<trace>/`, and the
 encoder at `models/Qwen3-VL-Embedding-8B`. Nothing large is committed.
 
 ## Pipeline

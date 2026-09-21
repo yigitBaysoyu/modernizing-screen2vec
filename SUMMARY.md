@@ -59,7 +59,7 @@ mixture), `paper_embedding_analysis.py`.
 
 ## Data and preprocessing
 
-RICO: 66,261 unique screens (global ids 0..66260) from 9,384 apps, plus filtered
+RICO: 66,261 unique screens (global ids within 0..72218, not contiguous) from 9,384 apps, plus filtered
 interaction traces; lives outside the repo at `../rico-data/`. `utils.py` cleans each raw
 hierarchy into `{"app", "activity", "components"}`: invisible and zero-area nodes
 dropped, inert scaffolding unwrapped, visible containers kept as grouping nodes, bounds
@@ -149,8 +149,19 @@ no-app arm shows what the app half hides: the screen vector alone depends strong
 seeds this is a finding to report, not a reason to move the headline off the recipe's D = 768.
 The permissive no-app backfill (seed 42 only, single runs) shows the same collapse at small D.
 
-Known, unexplained, negligible: the Midas population has one prediction instance fewer than
-the original machine's (strict 34,139 vs. 34,140; permissive 54,517 vs. 54,518).
+One screen is missing on Midas, and only there: **layout id 2906** (a help dialog in
+`com.peha.mapdistancemeter`) has no embedding in `embeddings_4096_last/`. Its cleaned JSON is
+752,384 characters — one `TextView` carries a 735,440-character help text, against a typical
+~1,900 characters per screen — and the 8B encoder ran out of memory on an 80 GB A100, twice
+(2026-09-17). The screen is the first of six in its trace, so the trace still qualifies with
+five screens and contributes one window fewer: Midas evaluates 34,139 strict instances
+(pool 54,519) where the original machine evaluated 34,140 (pool 54,520), and 54,517
+permissive instances instead of 54,518. Everything else is identical (trace index
+byte-identical; no other screen skipped). The sweeps are therefore comparable with each other
+exactly, and with the original notebooks up to this one instance. Investigated read-only on
+2026-09-21; the embedding was deliberately not regenerated after the freeze. The same screen
+is the likely reason some reconstruction runs record n = 66,260 rather than 66,261 (not
+verified).
 
 ## Reporting rules (carried over, still in force)
 

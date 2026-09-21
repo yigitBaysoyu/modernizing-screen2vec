@@ -44,7 +44,7 @@ namespace.
 
 | | source | numbering |
 |---|---|---|
-| Embeddings | `data/layouts/<id>.json` — the "UI Screenshots and View Hierarchies" corpus | **global**, `0…66260`, one counter across the whole crawl |
+| Embeddings | `data/layouts/<id>.json` — the "UI Screenshots and View Hierarchies" corpus | **global**, 66,261 ids within `0…72218` (not contiguous), one counter across the whole crawl |
 | Traces | `filtered_traces/<app>/<trace>/gestures.json` | **per-trace** UI indices, restarting in every trace |
 
 `1_qwen_generate_embeddings.py` embeds the layouts corpus and names each `.npz` after its
