@@ -1,0 +1,22 @@
+\begin{table}[t]
+    \centering
+    \caption{GUI screen prediction against the learned screen-embedding dimension $D$ (sweep configuration \texttt{permissive}, protocol \texttt{permissive}; every point uses $D$ + 768 app-description dimensions). Mean over seeds, $\pm$ sample SD where repeated; differences smaller than the seed SD are not resolved. Top-1 and MRR are the informative columns; Top-0.1\,\% and above are saturated by app identity and normalised RMSE is not comparable to the paper's. Protocol \texttt{permissive}: the paper row was computed on the strict population and is shown for orientation only; it is not a comparison.}
+    \label{tab:dimension_sweep_permissive}
+    \small
+    \begin{tabular}{@{}rrrrrrrr@{}}
+        \toprule
+        $D$ & $n$ & Top-1 & MRR & Top-0.01% & Top-0.1% & Top-1% & Norm.RMSE \\
+        \midrule
+        16 & 3 & 0.1015 $\pm$ 0.0029 & 0.2833 $\pm$ 0.0025 & 0.6356 $\pm$ 0.0018 & 0.9781 $\pm$ 0.0014 & 0.9928 $\pm$ 0.0010 & 0.4685 $\pm$ 0.0214 \\
+        32 & 3 & 0.1126 $\pm$ 0.0069 & 0.2928 $\pm$ 0.0053 & 0.6431 $\pm$ 0.0011 & 0.9842 $\pm$ 0.0012 & 0.9966 $\pm$ 0.0007 & 0.5508 $\pm$ 0.0225 \\
+        64 & 3 & 0.1128 $\pm$ 0.0242 & 0.2954 $\pm$ 0.0176 & 0.6518 $\pm$ 0.0009 & 0.9865 $\pm$ 0.0020 & 0.9976 $\pm$ 0.0010 & 0.5685 $\pm$ 0.0448 \\
+        128 & 3 & 0.1023 $\pm$ 0.0246 & 0.2895 $\pm$ 0.0179 & 0.6568 $\pm$ 0.0010 & 0.9882 $\pm$ 0.0012 & 0.9981 $\pm$ 0.0006 & 0.5806 $\pm$ 0.0584 \\
+        256 & 3 & 0.0922 $\pm$ 0.0294 & 0.2818 $\pm$ 0.0212 & 0.6558 $\pm$ 0.0029 & 0.9898 $\pm$ 0.0006 & 0.9983 $\pm$ 0.0006 & 0.5566 $\pm$ 0.0640 \\
+        512 & 3 & 0.0951 $\pm$ 0.0106 & 0.2828 $\pm$ 0.0070 & 0.6514 $\pm$ 0.0021 & 0.9883 $\pm$ 0.0014 & 0.9981 $\pm$ 0.0004 & 0.5898 $\pm$ 0.0284 \\
+        768 & 3 & 0.0900 $\pm$ 0.0061 & 0.2788 $\pm$ 0.0037 & 0.6507 $\pm$ 0.0013 & 0.9886 $\pm$ 0.0013 & 0.9982 $\pm$ 0.0004 & 0.5852 $\pm$ 0.0135 \\
+        1024 & 3 & 0.1140 $\pm$ 0.0135 & 0.2953 $\pm$ 0.0100 & 0.6471 $\pm$ 0.0013 & 0.9885 $\pm$ 0.0009 & 0.9986 $\pm$ 0.0002 & 0.6252 $\pm$ 0.0079 \\
+        \midrule
+        768 (paper, strict pop.) & -- & 0.0610 & -- & 0.2580 & 0.9690 & 0.9980 & 0.8530 \\
+        \bottomrule
+    \end{tabular}
+\end{table}
