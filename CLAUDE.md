@@ -17,10 +17,10 @@ model. RICO screens (screenshot + cleaned view hierarchy) are embedded with the 
 3. **Component prediction** (paper Table 2, `10_`–`13_`) — unfinished and retired; not
    part of the thesis.
 
-**Evidence freeze (2026-09):** no further adapter training is executed. The only pending
-run is the reduced *strict* dimension sweep (`4_sweep_embedding_dimensions.py`; the
-permissive sweeps landed 2026-09-20). Everything else is recorded in the `_results_*`
-notebooks — see the notebook map in `SUMMARY.md`.
+**Evidence freeze (2026-09-21, tag `results-freeze`):** the evidence is complete; no runs are
+pending. Everything is recorded in the `_results_*` notebooks and `dimension_sweep/` — see
+the notebook map in `SUMMARY.md`. A new run after the freeze is an explicit event: it must be
+agreed with the authors, and the thesis's results manifest must be regenerated.
 
 ## Environment and data
 

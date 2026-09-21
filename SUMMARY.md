@@ -25,14 +25,13 @@ retired:
 
 ## Evidence freeze
 
-**No further adapter training will be executed.** The evidence base is what is recorded in
-the `_results_*` notebooks. The embedding-dimension sweep landed on 2026-09-20 under the
-**permissive** protocol (hidden 1024 and 4096, 3 seeds each). Because only strict numbers may
-be compared with the paper, one last run is planned: a reduced **strict** sweep (hidden 1024;
-D = 16, 64, 256, 768; seeds 42–44; projector + LSTM only), which also records the no-app arm
-and gives the strict headline a seed error bar. When it lands, the evidence is complete; the
-thesis's results manifest (`results.json`, extracted from the notebooks) is the only citable
-source of numbers.
+**The evidence is complete (2026-09-21, tag `results-freeze`). No further runs are planned.**
+The evidence base is what is recorded in the `_results_*` notebooks and in
+`dimension_sweep/`. The last runs were the embedding-dimension sweeps: two under the
+permissive protocol (2026-09-20; hidden 1024 and 4096, 3 seeds each) and the reduced
+**strict** sweep (2026-09-21; hidden 1024; D = 16, 64, 256, 768; seeds 42–44), every point of
+which is also evaluated on the screen vector alone (`no_app`). The thesis's results manifest
+(`results.json`, extracted from these records) is the only citable source of numbers.
 
 ## Notebook map
 
@@ -47,7 +46,7 @@ source of numbers.
 | `_results_screen_observability.ipynb` | The observability scan: whitelist/blacklist derivation, threshold sensitivity, covariates |
 | `_results_sequence_prediction_s2v_strict.ipynb` | Table 3 under Screen2Vec's own population; no-app and with-app rows |
 | `_results_sequence_prediction_nback{1,2,3}.ipynb` | N-back protocol, K = 1..3; no-app and with-app rows |
-| `_results_dimension_sweep.ipynb` | Projection-dimension sweeps: permissive (hidden 1024, D = 16…1024; hidden 4096, D = 16…2048; 3 seeds) — within-protocol only, paper row is orientation; strict (hidden 1024, D = 16/64/256/768, 3 seeds) — **planned**, the thesis figure. Includes the no-app arm where recorded |
+| `_results_dimension_sweep.ipynb` | Projection-dimension sweeps: permissive (hidden 1024, D = 16…1024; hidden 4096, D = 16…2048; 3 seeds) — within-protocol only, paper row is orientation; strict (hidden 1024, D = 16/64/256/768, 3 seeds) — the thesis figure, the only sweep compared with the paper. No-app arm: all 12 strict runs, and the 17 seed-42 permissive runs |
 | `_results_component_prediction.ipynb` | The unfinished Track C attempt; no results |
 | `rico-metrics.ipynb` | Dataset statistics |
 
@@ -130,8 +129,28 @@ Recorded headline results (details and caveats in the notebooks and
 between 0.270 and 0.295 from D = 16 to 2048, with seed SDs up to 0.029 — no detectable trend
 within seed noise; the hidden width (1024 vs. 4096) makes no difference beyond that noise.
 All 51 runs share one population (7,164 traces, 54,517 instances). These numbers are **not**
-comparable with the paper's Table 3 or with the strict headline. **Planned:** the reduced
-strict sweep described under "Evidence freeze", with the no-app arm.
+comparable with the paper's Table 3 or with the strict headline.
+
+**Strict sweep** (3 seeds, trained on Midas at `92a3336`; mean ± sample SD):
+
+| D | Top-1, with app | MRR, with app | Top-1, screen vector alone | MRR, screen vector alone |
+|---:|---:|---:|---:|---:|
+| 16 | 0.1084 ± 0.0164 | 0.2810 ± 0.0150 | 0.0245 ± 0.0094 | 0.0750 ± 0.0166 |
+| 64 | 0.1368 ± 0.0389 | 0.3135 ± 0.0377 | 0.0752 ± 0.0248 | 0.1613 ± 0.0295 |
+| 256 | 0.1866 ± 0.0159 | 0.3611 ± 0.0156 | 0.1275 ± 0.0195 | 0.2316 ± 0.0268 |
+| 768 | 0.1318 ± 0.0279 | 0.3101 ± 0.0268 | 0.0834 ± 0.0232 | 0.1798 ± 0.0290 |
+
+Every one of the 12 strict runs beats the paper's Top-1 of 0.061 with the app half (lowest
+single run: 0.0898). The D = 768 seeds (0.1636, 0.1207, 0.1112) bracket the original single
+run recorded in `_results_sequence_prediction_s2v_strict.ipynb` (0.1182), which was trained on
+another machine; all three sweep seeds were trained fresh (`trained_in_sweep: true`). The
+no-app arm shows what the app half hides: the screen vector alone depends strongly on D
+(0.0245 at D = 16 vs. 0.1275 at D = 256). D = 256 is the best point in both arms; with three
+seeds this is a finding to report, not a reason to move the headline off the recipe's D = 768.
+The permissive no-app backfill (seed 42 only, single runs) shows the same collapse at small D.
+
+Known, unexplained, negligible: the Midas population has one prediction instance fewer than
+the original machine's (strict 34,139 vs. 34,140; permissive 54,517 vs. 54,518).
 
 ## Reporting rules (carried over, still in force)
 
