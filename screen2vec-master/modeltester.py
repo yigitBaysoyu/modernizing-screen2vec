@@ -36,7 +36,8 @@ def pad_collate(batch):
 parser = argparse.ArgumentParser()
 
 parser.add_argument("-m", "--model", required=True, type=str, help="path to pretrained model to test")
-parser.add_argument("-v", "--net_version", type=int, default=4, help="version as set when training")parser.add_argument("-d", "--data", required=True, type=str, default=None, help="prefix of precomputed data")
+parser.add_argument("-v", "--net_version", type=int, default=4, help="version as set when training")
+parser.add_argument("-d", "--data", required=True, type=str, default=None, help="prefix of precomputed data")
 parser.add_argument("-n", "--num_predictors", type=int, default=4, help="number of other labels used to predict one")
 args = parser.parse_args()
 
