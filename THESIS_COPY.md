@@ -48,3 +48,17 @@ are unchanged and still mention some of these files.
 RICO, the Qwen3-VL-Embedding-8B checkpoint, embeddings, adapters and reconstructions live
 outside the repository; see `CLAUDE.md`. The thesis's own numbers come from the thesis
 repository's `results/results.json`, not from this copy.
+
+## Added from the run-machine archive (not in the source repo)
+
+Four files the source repo's `.gitignore` excludes (`/graphics`), copied on 2026-10-29 from
+`run-machine-data/archived-data/graphics/` and force-added here so the frozen notebooks can
+read them under the paths they expect. SHA-256 of both `.gz` files matches the thesis's
+`audits/evidence/run-machine/SHA256SUMS.txt`.
+
+- `graphics/qwen3_repaired_boxplot_metrics.csv.gz` (+ `.meta.json`): the cache written by
+  `_results_reconstructions_boxplots.ipynb`; 993,914 rows, one per screen and run for the 15
+  Qwen3-Base runs (sha256 `6ce8d585…c109f7`).
+- `graphics/qwen3_adapter_validation_ids.csv.gz` (+ `.meta.json`): the 66,261 screen ids with
+  their adapter split (52,776 train, 13,192 validation, 290 excluded as too long, 3 excluded
+  as shard tail) (sha256 `6af24670…13cd4`).

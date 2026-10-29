@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "collapse_loops": true,
+  "inventory": {
+    "4096_last__via__embeddings_4096_last_full_qwen3-0.6b-base": {
+      "count": 66261,
+      "latest_mtime_ns": 1788347760000000000
+    },
+    "4096_last__via__embeddings_4096_last_full_qwen3-1.7b-base": {
+      "count": 66261,
+      "latest_mtime_ns": 1788676643000000000
+    },
+    "4096_last__via__embeddings_4096_last_full_qwen3-4b-base": {
+      "count": 66261,
+      "latest_mtime_ns": 1788797121000000000
+    },
+    "4096_avg__via__embeddings_4096_avg_full_qwen3-0.6b-base": {
+      "count": 66261,
+      "latest_mtime_ns": 1788325294000000000
+    },
+    "4096_avg__via__embeddings_4096_avg_full_qwen3-1.7b-base": {
+      "count": 66261,
+      "latest_mtime_ns": 1787958870000000000
+    },
+    "4096_avg__via__embeddings_4096_avg_full_qwen3-4b-base": {
+      "count": 66261,
+      "latest_mtime_ns": 1788793975000000000
+    },
+    "4x4096_avg__via__embeddings_4x4096_avg_full_qwen3-0.6b-base": {
+      "count": 66261,
+      "latest_mtime_ns": 1788368643000000000
+    },
+    "4x4096_avg__via__embeddings_4x4096_avg_full_qwen3-1.7b-base": {
+      "count": 66260,
+      "latest_mtime_ns": 1787775032000000000
+    },
+    "4x4096_avg__via__embeddings_4x4096_avg_full_qwen3-4b-base": {
+      "count": 66261,
+      "latest_mtime_ns": 1788781995000000000
+    },
+    "16x4096_avg__via__embeddings_16x4096_avg_full_qwen3-0.6b-base": {
+      "count": 66261,
+      "latest_mtime_ns": 1788302738000000000
+    },
+    "16x4096_avg__via__embeddings_16x4096_avg_full_qwen3-1.7b-base": {
+      "count": 66261,
+      "latest_mtime_ns": 1787979736000000000
+    },
+    "16x4096_avg__via__embeddings_16x4096_avg_full_qwen3-4b-base": {
+      "count": 66261,
+      "latest_mtime_ns": 1788790503000000000
+    },
+    "64x4096_avg__via__embeddings_64x4096_avg_full_qwen3-0.6b-base": {
+      "count": 66261,
+      "latest_mtime_ns": 1788281203000000000
+    },
+    "64x4096_avg__via__embeddings_64x4096_avg_full_qwen3-1.7b-base": {
+      "count": 66261,
+      "latest_mtime_ns": 1788001985000000000
+    },
+    "64x4096_avg__via__embeddings_64x4096_avg_full_qwen3-4b-base": {
+      "count": 66261,
+      "latest_mtime_ns": 1788781367000000000
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "inputs": {
+    "schema_version": 1,
+    "tokenizer_id": "Qwen/Qwen3-1.7B-Base",
+    "max_target_len": 4096,
+    "world_size": 8,
+    "embedding_id_count": 66261,
+    "embedding_id_sha256": "b3aefeb0e47769c9eb521011cd1bf8126cc969a9d88786988f15ac0372cae60c",
+    "utils_sha256": "7d65076abd33decceaa3e173768ca2bfb70bc7e77abbbeeed745537afa34fd56",
+    "trainer_sha256": "ef67ae0d4004cc1bf622b4703ec9291eeae45bab1e3e44476cb9afccfa0c22a0"
+  },
+  "results": {
+    "counts": {
+      "train": 52776,
+      "validation": 13192,
+      "excluded_too_long": 290,
+      "excluded_validation_shard_tail": 3
+    },
+    "train_shard_tail_ids": [],
+    "validation_shard_tail_ids": [
+      72216,
+      72217,
+      72218
+    ],
+    "tokenizer_commit_hash": null
+  }
+}
