@@ -2,7 +2,7 @@ Embedding-dimension sweep - GUI Screen Prediction (joint recipe: 9_ -> 6_ -> 4_)
 protocol=permissive  hidden_dim=1024  raw=embeddings_4096_last  seeds=[42, 43, 44]
 Final embedding per point = D screen dims + 768 app-description dims
 Top-1 and MRR are the informative columns; Top-0.1% and above are saturated by app identity,
-and Norm.RMSE is not comparable to the paper's (REPLICATION_AUDIT.md 2-3).
+and Norm.RMSE is not comparable to the paper's.
 The seed SD is the resolution of this sweep: a difference between two dimensions that is
 smaller than it is not detected -- 'no detectable trend', not 'equal'.
 ==========================================================================================================================

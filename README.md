@@ -6,12 +6,8 @@ screen — screenshot plus cleaned view-hierarchy JSON — is embedded by the re
 cleaned hierarchy from the embedding alone and (b) predict the next screen in an
 interaction trace, the paper's Table 3 task.
 
-- `SUMMARY.md` — what exists, what is finished, where the evidence lives (start here)
-- `CLAUDE.md` — invariants and conventions for anyone editing the code
-- `REPLICATION_AUDIT.md` — the Table 3 replication audit (trace-index bug, measurement
-  problems in the original evaluation)
-- `screen2vec-paper/` — the original paper (`screen2vec.txt`, HTML); `screen2vec-master/`
-  — the original authors' code
+- `../related-work/papers/liScreen2VecSemanticEmbedding2021.html.txt` — the original paper
+  as text, in the thesis repository; `screen2vec-master/` — the original authors' code
 
 ## Setup
 
@@ -127,8 +123,7 @@ run the strict sweep, the no-app backfill and the notebook.
 
 ## Results
 
-The `_results_*.ipynb` notebooks are the record of every experiment (map and headline
-numbers in `SUMMARY.md`). Reading rules: Top-1 and MRR are the informative retrieval
-columns; Top-0.1% and above are saturated by the app-description half; normalised RMSE
-is not comparable to the paper's; strict and repaired reconstruction scores are reported
-separately. See `REPLICATION_AUDIT.md` §§2–3 for why.
+The `_results_*.ipynb` notebooks are the record of every experiment. Reading rules: Top-1
+and MRR are the informative retrieval columns; Top-0.1% and above are saturated by the
+app-description half; normalised RMSE is not comparable to the paper's; strict and repaired
+reconstruction scores are reported separately.

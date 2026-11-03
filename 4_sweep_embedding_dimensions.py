@@ -35,9 +35,9 @@ in which case the D=768 point writes the very artefacts the notebooks read.
 
 Every stage resolves trace keys through trace_layout_index.csv (the scripts
 refuse to run without it); numbers from before the 2026-08-21 index fix are
-void and must not be mixed into a results file -- see REPLICATION_AUDIT.md.
+void and must not be mixed into a results file.
 
-Reading the results (REPLICATION_AUDIT.md sections 2-3): Top-1 and MRR are the
+Reading the results: Top-1 and MRR are the
 informative columns.  Top-0.1% and above are saturated by the app-description
 half (an app-only oracle already reaches 0.9968 at Top-0.1%), and normalised
 RMSE is not comparable to the paper's.  The figure therefore plots Top-1 and
@@ -452,7 +452,7 @@ def write_table(paths: SweepPaths, results: dict) -> str:
         f"raw={meta.get('raw_embeddings_dir', '?')}  seeds={meta.get('seeds', '?')}",
         "Final embedding per point = D screen dims + 768 app-description dims",
         "Top-1 and MRR are the informative columns; Top-0.1% and above are saturated by app identity,",
-        "and Norm.RMSE is not comparable to the paper's (REPLICATION_AUDIT.md 2-3).",
+        "and Norm.RMSE is not comparable to the paper's.",
     ]
     if multi:
         lines.append("The seed SD is the resolution of this sweep: a difference between two dimensions that is")
@@ -584,7 +584,7 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--protocol", choices=("permissive", "strict", "nback"), default="strict",
                         help="Evaluation protocol, passed to BOTH the trainer and the evaluator. Default: "
                              "strict, Screen2Vec's own population and the only protocol whose numbers may be "
-                             "compared with the paper's Table 3 (permissive is superseded, see CLAUDE.md).")
+                             "compared with the paper's Table 3 (permissive is superseded).")
     common.add_argument("--nback", type=int, default=None, metavar="K",
                         help="Context length for --protocol nback")
     common.add_argument("--hidden_dim", type=int, default=DEFAULT_HIDDEN_DIM,
