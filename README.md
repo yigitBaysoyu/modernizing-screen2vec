@@ -86,8 +86,10 @@ commands of the sweep.
 - **Rico.** The scripts expect the dataset next to the repository at
   `../rico-data/` (`data/layouts/`, `data/traces/filtered_traces/`,
   `data/play_store_metadata/`) and the embedder at
-  `../rico-data/models/Qwen3-VL-Embedding-8B`. Rico is available from
-  <http://interactionmining.org/rico>. Five example screens for the tests are in
+  `../rico-data/models/Qwen3-VL-Embedding-8B`. This is the layout of the data
+  repository used for the runs, <https://git.uni-due.de/sgjolieb/rico-data>,
+  which holds Rico, the scraped Play Store metadata and the copy of the
+  embedder. Rico itself is published at <http://interactionmining.org/rico>. Five example screens for the tests are in
   `data/rico-examples/`.
 - **Embeddings, adapter weights and raw decoder outputs.** They are too large
   for a repository (the embeddings alone are between 417 MB and 29.8 GB per
@@ -121,6 +123,10 @@ These are stated in Section 4.6 of the thesis and repeated here:
   recorded; Table 4.1 gives the configured values. The default `lm_model_id` in
   `2_train_adapter.py` is an older decoder; the reported runs passed
   `--lm_model_id Qwen/Qwen3-{0.6B,1.7B,4B}-Base` from the launchers.
+- The embedding does not reproduce the embedder's own script exactly: that
+  script resizes images to at most 1,800 visual tokens and truncates long
+  inputs, whereas `1_qwen_generate_embeddings.py` uses the processor's default
+  of 1,280 visual tokens and does not truncate.
 - One screen could not be embedded on one of the two machines. The dimension
   sweep and one reconstruction run therefore have one instance fewer than the
   others.
