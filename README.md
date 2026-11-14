@@ -5,7 +5,7 @@ Code and recorded results for the bachelor's thesis
 > **Modernizing Screen2Vec: Using Vision-Language Models to Generate Novel User
 > Interfaces Based on Their Semantic Embeddings**
 > Yigit Baysoyu, TU Dortmund, 2026.
-> Examiners: Prof. Dr. Sven Mayer and Prof. Dr. Jonathan Liebers.
+> Examiners: Prof. Dr. Sven Mayer and Dr. Jonathan Liebers.
 
 The thesis is in [`thesis/thesis.pdf`](thesis/thesis.pdf).
 
@@ -29,7 +29,7 @@ hierarchy. Two tracks then read those vectors:
 
 ## Credits
 
-This repository continues the project repository shared with Prof. Dr. Jonathan
+This repository continues the project repository shared with Dr. Jonathan
 Liebers, who supervised the thesis and wrote a large part of the code. The
 commit history is kept in full and shows who contributed what.
 
