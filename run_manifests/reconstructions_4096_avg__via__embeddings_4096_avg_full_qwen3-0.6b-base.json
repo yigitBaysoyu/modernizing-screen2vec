@@ -1,0 +1,9 @@
+{
+  "projector_model": "adapter_model_out_embeddings_4096_avg_full_qwen3-0.6b-base/best_projector.pth",
+  "lora_model": "adapter_model_out_embeddings_4096_avg_full_qwen3-0.6b-base/best_lora_adapter",
+  "embeddings_dir": "embeddings_4096_avg",
+  "data_dir": "../rico-data/data/layouts",
+  "max_tokens": 4608,
+  "lm_model_id": null,
+  "created_at": "2026-09-02T00:13:41"
+}

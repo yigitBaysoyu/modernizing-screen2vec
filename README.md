@@ -46,7 +46,7 @@ Li, Popowski, Mitchell and Myers under its Apache-2.0 licence; see the
 | Section 4.2, trace statistics | `rico-metrics.ipynb` | recorded in the notebook |
 | Section 4.3, embedding and pooling | `1_qwen_generate_embeddings.py` | not included (see below) |
 | Section 4.4 and Table 4.1, adapter and training settings | `2_train_adapter.py`, launched by `2_train_adapter_amplitude.sh` through `hpc/_hpc5_start_adapter_and_reconstruction.py` and `hpc/_hpc7_qwen3_4b_64x4096_all_in_one.py` | – |
-| Section 4.4, decoding | `3_json_reconstruction_par.py` | not included (see below) |
+| Section 4.4, decoding | `3_json_reconstruction_par.py` | `run_manifests/` (one file per run: adapter, embeddings, token limit, date); the decoded outputs are not included (see below) |
 | Table 4.2, metrics, JSON repair and loop collapse | `reconstruction_metrics.py`, `repair_rescore.py` | – |
 | Section 4.4, whitelist and blacklist | `screen_observability.py`, `_results_screen_observability.ipynb` | `screen_observability.csv`, `screen_observability.meta.json`, `graphics/screen_observability/` |
 | Tables 5.1, 5.2, 5.3, A.1, A.2; Figures 5.1, 5.2 | `_results_reconstruction.ipynb`, `_results_reconstructions_boxplots.ipynb` | `graphics/qwen3_repaired_boxplot_metrics.csv.gz` (the repaired per-screen scores of all fifteen adapters), `graphics/qwen3_adapter_validation_ids.csv.gz` (the validation split) |
@@ -54,7 +54,7 @@ Li, Popowski, Mitchell and Myers under its Apache-2.0 licence; see the
 | Section 4.5 and Table 4.3, projector and LSTM | `9_train_joint.py` | training logs in the four `_results_sequence_prediction_*.ipynb` |
 | Section 4.5, app text and app vector | `gplay_scraper.py`, `6_generate_app_context_embeddings.py` | – |
 | Tables 4.4 and 5.4, strict and *n*-back protocols | `4_evaluate_screen_prediction.py` | `_results_sequence_prediction_s2v_strict.ipynb`, `_results_sequence_prediction_nback{1,2,3}.ipynb` |
-| Figure 5.4 and Table A.3, dimension sweep | `4_sweep_embedding_dimensions.py`, `_run_dimension_sweep.sh`, `_results_dimension_sweep.ipynb` | `dimension_sweep/results_strict.json`, `dimension_sweep/sweep_results_strict.csv`, `graphics/dimension_sweep/` |
+| Figure 5.4 and Table A.3, dimension sweep | `4_sweep_embedding_dimensions.py`, `_run_dimension_sweep.sh`, `_results_dimension_sweep.ipynb` | `dimension_sweep/results_strict.json`, `dimension_sweep/sweep_results_strict.csv` |
 | Section 4.6, comparison with the original evaluator | `third_party/screen2vec/` | – |
 
 Table A.4 (storage sizes) was measured on the run machine and has no file here.
@@ -101,7 +101,8 @@ commands of the sweep.
   to the machines the runs were made on.
 - `_results_dimension_sweep.ipynb` also shows an earlier pilot sweep under a
   looser protocol. The thesis reports only the strict sweep, and only its result
-  files are kept here.
+  files are kept here. The notebooks write their plots to `graphics/` when run;
+  the plots themselves are not stored.
 - Reconstruction scores in the thesis are the *repaired* scores (after JSON
   repair and loop collapse).
 - The normalised RMSE of the screen-prediction runs is not comparable with the
@@ -111,7 +112,11 @@ commands of the sweep.
 
 These are stated in Section 4.6 of the thesis and repeated here:
 
-- `requirements.txt` pins no library versions.
+- `requirements.txt` pins no library versions. `requirements-recorded.txt` lists
+  the versions installed on the development machine, where the four
+  screen-prediction runs and the result notebooks were executed. The
+  environments of the cluster jobs and of the machine the dimension sweep ran
+  on were not recorded.
 - The settings, epochs and loss curves of the fifteen adapter runs were not
   recorded; Table 4.1 gives the configured values. The default `lm_model_id` in
   `2_train_adapter.py` is an older decoder; the reported runs passed
@@ -134,6 +139,8 @@ python -m unittest tests.function_tests -v      # from the repository root
 `requirements.txt` points at the CUDA 12.4 build of PyTorch. The tests need no
 GPU and no Rico download.
 
-The launchers in `hpc/` generate Slurm jobs for one specific cluster. Paths and
+The launchers in `hpc/` generate Slurm jobs for one specific cluster. They are
+kept as the record of how the embedding, the adapter training and the decoding
+were started (eight GPUs for training, the decoder of each run). Paths and
 partition names in them belong to that cluster, and the mail address is a
 placeholder.
