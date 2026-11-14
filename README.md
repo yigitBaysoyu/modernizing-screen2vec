@@ -1,129 +1,139 @@
-# screen2vec-revisited
+# Modernizing Screen2Vec
 
-Revisits *Screen2Vec* (Li et al., CHI 2021) with a frozen foundation model. Every RICO
-screen — screenshot plus cleaned view-hierarchy JSON — is embedded by the released
-`Qwen3-VL-Embedding-8B`, unchanged; small networks trained on top (a) reconstruct the
-cleaned hierarchy from the embedding alone and (b) predict the next screen in an
-interaction trace, the paper's Table 3 task.
+Code and recorded results for the bachelor's thesis
 
-- `../related-work/papers/liScreen2VecSemanticEmbedding2021.html.txt` — the original paper
-  as text, in the thesis repository; `screen2vec-master/` — the original authors' code
+> **Modernizing Screen2Vec: Using Vision-Language Models to Generate Novel User
+> Interfaces Based on Their Semantic Embeddings**
+> Yigit Baysoyu, TU Dortmund, 2026.
+> Examiners: Prof. Dr. Sven Mayer and Dr. Jonathan Liebers.
 
-## Setup
+The thesis is in [`thesis/thesis.pdf`](thesis/thesis.pdf).
 
-```powershell
-.\.venv\Scripts\activate          # Windows dev box; analysis notebooks also run on macOS
-pip install -r requirements.txt   # pulls the CUDA 12.4 torch index
-python check_gpu.py
-python -m unittest tests.function_tests -v   # from the repo root
+## What the thesis does
+
+Screen2Vec (Li et al., CHI 2021) learns embeddings of mobile GUI screens from the
+text and layout of their components. The thesis asks whether a general-purpose
+vision-language embedding model, used without further training, can take its
+place, and what its vectors hold of a screen.
+
+Every screen of the Rico dataset is embedded once by the frozen
+`Qwen3-VL-Embedding-8B`, from its screenshot together with its cleaned view
+hierarchy. Two tracks then read those vectors:
+
+- **Reconstruction.** An adapter (a projector plus LoRA weights on a Qwen3-Base
+  decoder) writes the cleaned hierarchy back out of the vectors. Fifteen adapters
+  are trained: three decoder sizes times five representations.
+- **Screen prediction.** A projector and an LSTM predict the next screen of an
+  interaction trace, evaluated with a re-implementation of Screen2Vec's released
+  evaluator.
+
+## Credits
+
+This repository continues the project repository shared with Dr. Jonathan
+Liebers, who supervised the thesis and wrote a large part of the code. The
+commit history is kept in full and shows who contributed what.
+
+The folder `third_party/screen2vec/` contains the original Screen2Vec code by
+Li, Popowski, Mitchell and Myers under its Apache-2.0 licence; see the
+[`NOTICE.md`](third_party/screen2vec/NOTICE.md) there.
+
+## Where each thesis result comes from
+
+| Thesis | Code | Recorded result |
+|---|---|---|
+| Section 4.2, cleaning rules; Figure 4.2 | `utils.py` | – |
+| Section 4.2, trace index (66,157 of 66,261 screens matched) | `trace_index.py`, `0_build_trace_index.py` | `trace_layout_index.csv`, `trace_layout_index_dropped.csv`, `trace_layout_index.meta.json` |
+| Section 4.2, trace statistics | `rico-metrics.ipynb` | recorded in the notebook |
+| Section 4.3, embedding and pooling | `1_qwen_generate_embeddings.py` | not included (see below) |
+| Section 4.4 and Table 4.1, adapter and training settings | `2_train_adapter.py`, launched by `2_train_adapter_amplitude.sh` through `hpc/_hpc5_start_adapter_and_reconstruction.py` and `hpc/_hpc7_qwen3_4b_64x4096_all_in_one.py` | – |
+| Section 4.4, decoding | `3_json_reconstruction_par.py` | not included (see below) |
+| Table 4.2, metrics, JSON repair and loop collapse | `reconstruction_metrics.py`, `repair_rescore.py` | – |
+| Section 4.4, whitelist and blacklist | `screen_observability.py`, `_results_screen_observability.ipynb` | `screen_observability.csv`, `screen_observability.meta.json`, `graphics/screen_observability/` |
+| Tables 5.1, 5.2, 5.3, A.1, A.2; Figures 5.1, 5.2 | `_results_reconstruction.ipynb`, `_results_reconstructions_boxplots.ipynb` | `graphics/qwen3_repaired_boxplot_metrics.csv.gz` (the repaired per-screen scores of all fifteen adapters), `graphics/qwen3_adapter_validation_ids.csv.gz` (the validation split) |
+| Figure 5.3, example screen | `_results_reconstructions_viz.ipynb` | recorded in the notebook |
+| Section 4.5 and Table 4.3, projector and LSTM | `9_train_joint.py` | training logs in the four `_results_sequence_prediction_*.ipynb` |
+| Section 4.5, app text and app vector | `gplay_scraper.py`, `6_generate_app_context_embeddings.py` | – |
+| Tables 4.4 and 5.4, strict and *n*-back protocols | `4_evaluate_screen_prediction.py` | `_results_sequence_prediction_s2v_strict.ipynb`, `_results_sequence_prediction_nback{1,2,3}.ipynb` |
+| Figure 5.4 and Table A.3, dimension sweep | `4_sweep_embedding_dimensions.py`, `_run_dimension_sweep.sh`, `_results_dimension_sweep.ipynb` | `dimension_sweep/results_strict.json`, `dimension_sweep/sweep_results_strict.csv`, `graphics/dimension_sweep/` |
+| Section 4.6, comparison with the original evaluator | `third_party/screen2vec/` | – |
+
+Table A.4 (storage sizes) was measured on the run machine and has no file here.
+
+## Order of the pipeline
+
 ```
-
-RICO lives outside the repo at `../rico-data/`: `data/layouts/<id>.json|.jpg` (66,261
-screens; global ids are not contiguous — they range over `0..72218` with gaps), `data/traces/filtered_traces/<app>/<trace>/`, and the
-encoder at `models/Qwen3-VL-Embedding-8B`. Nothing large is committed.
-
-## Pipeline
-
-```
-raw RICO ──utils.py──▶ cleaned JSON (+ screenshot)
+raw Rico ──utils.py──▶ cleaned JSON (+ screenshot)
    │
-   ├─ 0_build_trace_index.py      trace ↔ layout id join (required by every trace stage)
+   ├─ 0_build_trace_index.py      trace ↔ layout id join (needed by every trace stage)
    ├─ 1_qwen_generate_embeddings  frozen Qwen3-VL-Embedding-8B → 1 or N pooled 4096-d vectors
    │
-   ├─ Reconstruction:  2_train_adapter ──▶ 3_json_reconstruction[_par] ──▶ repair_rescore
-   └─ Sequence:        9_train_joint ──▶ 6_generate_app_context_embeddings ──▶ 4_evaluate_screen_prediction
-                        (dimension sweep: 4_sweep_embedding_dimensions wraps the three)
+   ├─ Reconstruction:    2_train_adapter ──▶ 3_json_reconstruction_par ──▶ repair_rescore
+   └─ Screen prediction: 9_train_joint ──▶ 6_generate_app_context_embeddings ──▶ 4_evaluate_screen_prediction
+                          (dimension sweep: 4_sweep_embedding_dimensions wraps the three)
 ```
 
-**Cleaning** (`utils.py::process_json_file`): invisible/zero-area nodes dropped, inert
-layout scaffolding unwrapped, visible containers kept, bounds binned to 1–100. The
-minified string is both encoder input and reconstruction target — **changing the cleaner
-invalidates every embedding, adapter and observability list.**
+The numbers in the file names are historical and have gaps. Scripts with the
+missing numbers were earlier variants that produced no result of the thesis;
+they are still in the commit history.
 
-### Embeddings — several shapes in one pass
+Every script is run from the repository root. `_run_table3_pipeline2.ps1` holds the three commands of the
+screen-prediction recipe; the reported runs add `--strict` or `--nback <n>` to
+the training and the evaluation command. `_run_dimension_sweep.sh` holds the
+commands of the sweep.
+
+## What is not in the repository
+
+- **Rico.** The scripts expect the dataset next to the repository at
+  `../rico-data/` (`data/layouts/`, `data/traces/filtered_traces/`,
+  `data/play_store_metadata/`) and the embedder at
+  `../rico-data/models/Qwen3-VL-Embedding-8B`. Rico is available from
+  <http://interactionmining.org/rico>. Five example screens for the tests are in
+  `data/rico-examples/`.
+- **Embeddings, adapter weights and raw decoder outputs.** They are too large
+  for a repository (the embeddings alone are between 417 MB and 29.8 GB per
+  representation). The per-screen scores computed from the decoder outputs are
+  included, see the table above.
+
+## Reading the recorded results
+
+- The notebooks are stored with the outputs of the runs the thesis reports, and
+  they are the record of those runs. Paths that appear in their outputs belong
+  to the machines the runs were made on.
+- `_results_dimension_sweep.ipynb` also shows an earlier pilot sweep under a
+  looser protocol. The thesis reports only the strict sweep, and only its result
+  files are kept here.
+- Reconstruction scores in the thesis are the *repaired* scores (after JSON
+  repair and loop collapse).
+- The normalised RMSE of the screen-prediction runs is not comparable with the
+  value printed in the Screen2Vec paper (Section 4.5 of the thesis).
+
+## Limits of reproducibility
+
+These are stated in Section 4.6 of the thesis and repeated here:
+
+- `requirements.txt` pins no library versions.
+- The settings, epochs and loss curves of the fifteen adapter runs were not
+  recorded; Table 4.1 gives the configured values. The default `lm_model_id` in
+  `2_train_adapter.py` is an older decoder; the reported runs passed
+  `--lm_model_id Qwen/Qwen3-{0.6B,1.7B,4B}-Base` from the launchers.
+- One screen could not be embedded on one of the two machines. The dimension
+  sweep and one reconstruction run therefore have one instance fewer than the
+  others.
+- The sweep script reuses the canonical run for *D* = 768, seed 42 when its
+  checkpoints are present. They were not present on the machine the sweep ran
+  on, so that point was trained again there (`trained_in_sweep: true` in
+  `dimension_sweep/results_strict.json`).
+
+## Setup and tests
 
 ```bash
-python 1_qwen_generate_embeddings.py job.json --pool-tokens 2 4 8 16 32 64 --pooling avg
-# -> embeddings_2x4096_avg/ ... embeddings_64x4096_avg/   (embeddings_4096_last/ for N=1)
+pip install -r requirements.txt
+python -m unittest tests.function_tests -v      # from the repository root
 ```
 
-All widths are pooled from the same forward pass. They are *not* derivable from one
-another afterwards: `adaptive_avg_pool1d` places bucket borders at `floor(i*L/N)` /
-`ceil((i+1)*L/N)`, which only coincide between two N when the sequence length divides
-evenly, and every bucket is L2-normalised separately. `--skip-existing` resumes a run
-that hit its wall time. On the cluster, set `POOL_TOKENS` in `hpc/_hpc1_start_embedding.py`.
+`requirements.txt` points at the CUDA 12.4 build of PyTorch. The tests need no
+GPU and no Rico download.
 
-### Reconstruction
-
-Training runs through accelerate (`2_train_adapter_amplitude.sh` / `_midas.sh`) or the
-Slurm generators in `hpc/`: `_hpc5_start_adapter_and_reconstruction.py` (train →
-eight-shard reconstruction → audit), `_hpc6_resume_*` (recover partial reconstruction
-sets; `--only qwen3-1.7b-base` selects one), `_hpc7_qwen3_4b_64x4096_all_in_one.py`
-(the 64×4096 run; excludes existing same-name directories so a rerun cannot reuse an old
-checkpoint). All use `--dry-run` first. Single-screen reconstruction:
-
-```bash
-python 3_json_reconstruction.py --projector_model <dir>/best_projector.pth \
-    --lora_model <dir>/best_lora_adapter/ --index 3 --embeddings_dir embeddings_4096_last/
-```
-
-Reports are written strictly at generation time (`<idx>_report.txt`); the repaired
-columns come from `repair_rescore.py` and are never mixed with strict ones.
-
-### Screen observability — whitelist / blacklist
-
-Some screens are drawn by components the hierarchy cannot see (WebView, video/GL,
-games, ads, maps): the cleaned JSON holds one opaque box where the screenshot holds a
-page. `screen_observability.py` scores every layout by opaque coverage and blacklists at
-≥ 0.5 or an empty cleaned screen (~20 s; writes `screen_observability.csv` + `.meta.json`
-with the cleaner hash). `_results_screen_observability.ipynb` exports
-`graphics/screen_observability/{whitelist,blacklist}_ids.txt` (55,220 / 11,041).
-
-### Sequence prediction (Table 3)
-
-```bash
-python 0_build_trace_index.py                       # once, ~7 min
-python 9_train_joint.py --proj_dim 768 [--strict | --nback K]
-python 6_generate_app_context_embeddings.py --embeddings_dir embeddings_seq_768 --output_dir embeddings_seq_768_with_app_desc
-python 4_evaluate_screen_prediction.py --embeddings_dir embeddings_seq_768_with_app_desc --lstm_model lstm_predictor_768d.pth [--strict | --nback K]
-```
-
-`_run_table3_pipeline2.ps1` runs this joint recipe end to end (the two-stage
-`_pipeline1` variant via `5_` + `8_` is kept for reference). `--strict` reproduces
-Screen2Vec's own evaluation population; `--nback K` predicts from exactly K preceding
-screens; the two are mutually exclusive and their numbers are never comparable.
-
-### Dimension sweep
-
-```bash
-# The thesis sweep: strict is the default protocol (Screen2Vec's own population).
-# D = 768 / seed 42 at the recipe width REUSES the canonical strict run if its checkpoints exist.
-python 4_sweep_embedding_dimensions.py run --hidden_dim 1024 --dims 16,64,256,768 --seeds 42,43,44 --gpu 0
-python 4_sweep_embedding_dimensions.py run --dims 768 --dry_run                 # print the commands
-python 4_sweep_embedding_dimensions.py plot --protocol permissive --hidden_dim 4096   # regenerate outputs
-# No-app arm for already recorded runs whose checkpoints still exist (evaluation only):
-python 4_sweep_embedding_dimensions.py noapp --protocol permissive --hidden_dim 1024 --gpu 0
-```
-
-Runs the joint recipe once per projection dimension D (and seed) and collects Top-1, Top-k%,
-MRR and nRMSE into `dimension_sweep/results{_proto}{_hH}.json`, with a table, CSV and figure.
-Each point is evaluated twice: with the app-description half (the Table 3 setting) and on the
-**screen vector alone** (`no_app`), because with the app half Top-1 is largely a choice among
-one app's screens. Non-default widths and seeds get `_h<H>` / `_s<S>` artefact tags and never
-overwrite the canonical checkpoints; `--force` refuses to retrain the canonical point
-(D = 768, recipe width, seed 42) unless `--force_canonical` is given.
-
-**Which sweep is which.** `results_strict.json` (hidden 1024; D = 16, 64, 256, 768; 3 seeds) is
-the thesis figure and the only one compared with the paper. `results.json` and
-`results_h4096.json` are **permissive** sweeps (hidden 1024 and 4096, 3 seeds): valid within
-their protocol — curve shape, hidden-width robustness — but their paper row is orientation
-only. Seed SD is the resolution of every sweep: smaller differences are "no detectable
-trend", not equality. `_run_dimension_sweep.sh` (Linux/Midas) and `_run_dimension_sweep.ps1`
-run the strict sweep, the no-app backfill and the notebook.
-
-## Results
-
-The `_results_*.ipynb` notebooks are the record of every experiment. Reading rules: Top-1
-and MRR are the informative retrieval columns; Top-0.1% and above are saturated by the
-app-description half; normalised RMSE is not comparable to the paper's; strict and repaired
-reconstruction scores are reported separately.
+The launchers in `hpc/` generate Slurm jobs for one specific cluster. Paths and
+partition names in them belong to that cluster, and the mail address is a
+placeholder.

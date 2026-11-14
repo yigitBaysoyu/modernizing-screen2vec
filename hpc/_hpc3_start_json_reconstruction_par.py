@@ -59,7 +59,7 @@ run_exclusive = False     # A single GPU per task -- never take a whole node
 NOW = datetime.now()
 # We define the timestamp once here to ensure the folder has a unique prefix
 NOW_STR = NOW.strftime('%Y-%m-%d-%H-%M-%S')
-MAIL_FROM = "jonathan.liebers@uni-due.de"
+MAIL_FROM = "user@example.org"  # address for Slurm job mails; replace with your own
 
 # ------------------------------------------------------------------------------
 # Shared output directory, on scratch rather than inside a task folder.

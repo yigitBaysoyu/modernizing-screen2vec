@@ -60,9 +60,10 @@ def send_email_with_attachments(subject, body, attachments):
     # Create the email message
     msg = EmailMessage()
     msg['Subject'] = subject
-    msg['From'] = "jonathan.liebers+amplitude@uni-duisburg-essen.de"
-    msg['To'] = "jonathan.liebers@uni-due.de"
-    msg['Cc'] = "amplitude@jo2k.de"
+    # Sender, recipient and mail server come from the environment; the defaults
+    # are placeholders and must be replaced before use.
+    msg['From'] = os.environ.get("MAIL_FROM", "user@example.org")
+    msg['To'] = os.environ.get("MAIL_TO", "user@example.org")
     msg.set_content(body)
 
     # Add attachments
@@ -73,7 +74,7 @@ def send_email_with_attachments(subject, body, attachments):
             msg.add_attachment(file_data, maintype='application', subtype='octet-stream', filename=file_name)
 
     # Send the email
-    with smtplib.SMTP('mailout.uni-due.de', 587, timeout=120) as server:
+    with smtplib.SMTP(os.environ.get("MAIL_SMTP_HOST", "smtp.example.org"), 587, timeout=120) as server:
         server.starttls()
         server.send_message(msg)
 

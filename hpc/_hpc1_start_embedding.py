@@ -50,7 +50,7 @@ NUM_GPU: int = 1  # 1..4; how many GPUs to reserve per job
 NOW = datetime.now()
 # We define the timestamp once here to ensure all 7 folders share the exact same prefix
 NOW_STR = NOW.strftime('%Y-%m-%d-%H-%M-%S')
-MAIL_FROM = "jonathan.liebers@uni-due.de"
+MAIL_FROM = "user@example.org"  # address for Slurm job mails; replace with your own
 # ==============================================================================
 
 

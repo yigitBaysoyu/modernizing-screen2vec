@@ -27,7 +27,7 @@ MAX_TOKENS = 4_608
 CPUS_PER_TASK = 8
 EVAL_WORKERS = 6
 RECON_TIME = "2-00:00:00"
-MAIL_TO = "jonathan.liebers@uni-due.de"
+MAIL_TO = "user@example.org"  # address for Slurm job mails; replace with your own
 
 RUN_SPECS = (
     ("qwen3-4b-base", "4x4096_avg"),

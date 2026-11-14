@@ -88,7 +88,7 @@ SCRATCH_ROOT = ("/lustre/scratch/sgjolieb-screen2vec"
 PROJECT_NAME = "s2v"
 DATA_DIR_NAME = "rico-data"
 runtarget = "GPU-H200"  # GPU partition for both GPU phases
-MAIL_FROM = "jonathan.liebers@uni-due.de"
+MAIL_FROM = "user@example.org"  # address for Slurm job mails; replace with your own
 
 NOW = datetime.now()
 # Defined once so every generated script agrees on the task folder name
