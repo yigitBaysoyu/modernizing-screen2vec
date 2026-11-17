@@ -7,7 +7,13 @@ Code and recorded results for the bachelor's thesis
 > Yigit Baysoyu, TU Dortmund, 2026.
 > Examiners: Prof. Dr. Sven Mayer and Prof. Dr. Jonathan Liebers.
 
-The thesis is in [`thesis/thesis.pdf`](thesis/thesis.pdf).
+**[Read the thesis (PDF)](thesis/thesis.pdf)**
+
+![The pipeline: every Rico screen is cleaned and embedded once by the frozen embedder; one track reconstructs the cleaned hierarchy from the vectors, the other predicts the next screen of a trace.](docs/pipeline.png)
+
+*The pipeline. Every Rico screen is cleaned and embedded once by the frozen
+embedder; one track reconstructs the cleaned hierarchy from the vectors, the other
+predicts the next screen of a trace.*
 
 ## What the thesis does
 
@@ -27,15 +33,25 @@ hierarchy. Two tracks then read those vectors:
   interaction trace, evaluated with a re-implementation of Screen2Vec's released
   evaluator.
 
-## Credits
+## Results
 
-This repository continues the project repository shared with Prof. Dr. Jonathan
-Liebers, who supervised the thesis and wrote a large part of the code. The
-commit history is kept in full and shows who contributed what.
+- **One vector gives a rough outline.** From a single vector, every decoder size
+  reaches an unordered class F1 of about 0.330.
+- **Sixty-four vectors give most of the hierarchy.** The largest decoder reaches
+  an unordered class F1 of 0.804 on the validation split, at the cost of more
+  storage than the original data.
+- **Screen prediction.** The small network reaches a Top-1 accuracy of 0.118,
+  against 0.061 for the best result printed in the Screen2Vec paper. The two
+  setups differ in several ways, so the gain cannot be assigned to one cause.
+- **Width.** Retrieval is best at 256 dimensions, about a third of the width of
+  the Screen2Vec vector.
 
-The folder `third_party/screen2vec/` contains the original Screen2Vec code by
-Li, Popowski, Mitchell and Myers under its Apache-2.0 licence; see the
-[`NOTICE.md`](third_party/screen2vec/NOTICE.md) there.
+Reconstruction scores are the scores after JSON repair and loop collapse.
+
+![One validation screen (a), its cleaned hierarchy drawn as boxes (b), and the hierarchies decoded from 1, 4, 16 and 64 vectors by the 1.7B decoder (c–f) and the 4B decoder (g–j).](docs/reconstruction-example.png)
+
+*One validation screen (a), its cleaned hierarchy (b), and what the 1.7B decoder
+(c–f) and the 4B decoder (g–j) write back from 1, 4, 16 and 64 vectors.*
 
 ## Where each thesis result comes from
 
@@ -59,83 +75,7 @@ Li, Popowski, Mitchell and Myers under its Apache-2.0 licence; see the
 
 Table A.4 (storage sizes) was measured on the run machine and has no file here.
 
-## Order of the pipeline
-
-```
-raw Rico ──utils.py──▶ cleaned JSON (+ screenshot)
-   │
-   ├─ 0_build_trace_index.py      trace ↔ layout id join (needed by every trace stage)
-   ├─ 1_qwen_generate_embeddings  frozen Qwen3-VL-Embedding-8B → 1 or N pooled 4096-d vectors
-   │
-   ├─ Reconstruction:    2_train_adapter ──▶ 3_json_reconstruction_par ──▶ repair_rescore
-   └─ Screen prediction: 9_train_joint ──▶ 6_generate_app_context_embeddings ──▶ 4_evaluate_screen_prediction
-                          (dimension sweep: 4_sweep_embedding_dimensions wraps the three)
-```
-
-The numbers in the file names are historical and have gaps. Scripts with the
-missing numbers were earlier variants that produced no result of the thesis;
-they are still in the commit history.
-
-Every script is run from the repository root. `_run_table3_pipeline2.ps1` holds the three commands of the
-screen-prediction recipe; the reported runs add `--strict` or `--nback <n>` to
-the training and the evaluation command. `_run_dimension_sweep.sh` holds the
-commands of the sweep.
-
-## What is not in the repository
-
-- **Rico.** The scripts expect the dataset next to the repository at
-  `../rico-data/` (`data/layouts/`, `data/traces/filtered_traces/`,
-  `data/play_store_metadata/`) and the embedder at
-  `../rico-data/models/Qwen3-VL-Embedding-8B`. This is the layout of the data
-  repository used for the runs, <https://git.uni-due.de/sgjolieb/rico-data>,
-  which holds Rico, the scraped Play Store metadata and the copy of the
-  embedder. Rico itself is published at <http://interactionmining.org/rico>. Five example screens for the tests are in
-  `data/rico-examples/`.
-- **Embeddings, adapter weights and raw decoder outputs.** They are too large
-  for a repository (the embeddings alone are between 417 MB and 29.8 GB per
-  representation). The per-screen scores computed from the decoder outputs are
-  included, see the table above.
-
-## Reading the recorded results
-
-- The notebooks are stored with the outputs of the runs the thesis reports, and
-  they are the record of those runs. Paths that appear in their outputs belong
-  to the machines the runs were made on.
-- `_results_dimension_sweep.ipynb` also shows an earlier pilot sweep under a
-  looser protocol. The thesis reports only the strict sweep, and only its result
-  files are kept here. The notebooks write their plots to `graphics/` when run;
-  the plots themselves are not stored.
-- Reconstruction scores in the thesis are the *repaired* scores (after JSON
-  repair and loop collapse).
-- The normalised RMSE of the screen-prediction runs is not comparable with the
-  value printed in the Screen2Vec paper (Section 4.5 of the thesis).
-
-## Limits of reproducibility
-
-These are stated in Section 4.7 of the thesis and repeated here:
-
-- `requirements.txt` pins no library versions. `requirements-recorded.txt` lists
-  the versions installed on the development machine, where the four
-  screen-prediction runs and the result notebooks were executed. The
-  environments of the cluster jobs and of the machine the dimension sweep ran
-  on were not recorded.
-- The settings, epochs and loss curves of the fifteen adapter runs were not
-  recorded; Table 4.1 gives the configured values. The default `lm_model_id` in
-  `2_train_adapter.py` is an older decoder; the reported runs passed
-  `--lm_model_id Qwen/Qwen3-{0.6B,1.7B,4B}-Base` from the launchers.
-- The embedding does not reproduce the embedder's own script exactly: that
-  script resizes images to at most 1,800 visual tokens and truncates long
-  inputs, whereas `1_qwen_generate_embeddings.py` uses the processor's default
-  of 1,280 visual tokens and does not truncate.
-- One screen could not be embedded on one of the two machines. The dimension
-  sweep and one reconstruction run therefore have one instance fewer than the
-  others.
-- The sweep script reuses the canonical run for *D* = 768, seed 42 when its
-  checkpoints are present. They were not present on the machine the sweep ran
-  on, so that point was trained again there (`trained_in_sweep: true` in
-  `dimension_sweep/results_strict.json`).
-
-## Setup and tests
+## Running it
 
 ```bash
 pip install -r requirements.txt
@@ -143,10 +83,56 @@ python -m unittest tests.function_tests -v      # from the repository root
 ```
 
 `requirements.txt` points at the CUDA 12.4 build of PyTorch. The tests need no
-GPU and no Rico download.
+GPU and no Rico download. Every script is run from the repository root, in this
+order:
 
-The launchers in `hpc/` generate Slurm jobs for one specific cluster. They are
-kept as the record of how the embedding, the adapter training and the decoding
-were started (eight GPUs for training, the decoder of each run). Paths and
-partition names in them belong to that cluster, and the mail address is a
-placeholder.
+1. `0_build_trace_index.py` joins traces and layout ids (needed by every trace stage).
+2. `1_qwen_generate_embeddings.py` embeds every screen with the frozen
+   Qwen3-VL-Embedding-8B, as 1 or *N* pooled 4096-dimensional vectors.
+3. **Reconstruction:** `2_train_adapter.py`, then `3_json_reconstruction_par.py`,
+   then `repair_rescore.py`.
+4. **Screen prediction:** `9_train_joint.py`, then
+   `6_generate_app_context_embeddings.py`, then `4_evaluate_screen_prediction.py`.
+   `_run_table3_pipeline2.ps1` holds these three commands; the reported runs add
+   `--strict` or `--nback <n>` to training and evaluation.
+5. **Dimension sweep:** `4_sweep_embedding_dimensions.py` wraps the three
+   screen-prediction steps; `_run_dimension_sweep.sh` holds its commands.
+
+The numbers in the file names are historical and have gaps; earlier variants are
+in the commit history. The launchers in `hpc/` generate Slurm jobs for one
+specific cluster and are kept as the record of how the runs were started.
+
+## What is not in the repository
+
+- **Rico.** The scripts expect the dataset next to the repository at
+  `../rico-data/` (`data/layouts/`, `data/traces/filtered_traces/`,
+  `data/play_store_metadata/`) and the embedder at
+  `../rico-data/models/Qwen3-VL-Embedding-8B`. This is the layout of the data
+  repository used for the runs, <https://git.uni-due.de/sgjolieb/rico-data>.
+  Rico itself is published at <http://interactionmining.org/rico>. Five example
+  screens for the tests are in `data/rico-examples/`.
+- **Embeddings, adapter weights and raw decoder outputs.** They are too large
+  for a repository (the embeddings alone are between 417 MB and 29.8 GB per
+  representation). The per-screen scores computed from the decoder outputs are
+  included, see the table above.
+
+## Limits of reproducibility
+
+Section 4.7 of the thesis states what could not be recorded or repeated exactly.
+Two points concern only the code:
+
+- `requirements.txt` pins no library versions. `requirements-recorded.txt` lists
+  the versions installed on the development machine.
+- The default `lm_model_id` in `2_train_adapter.py` is an older decoder; the
+  reported runs passed `--lm_model_id Qwen/Qwen3-{0.6B,1.7B,4B}-Base` from the
+  launchers.
+
+## Credits
+
+This repository continues the project repository shared with Prof. Dr. Jonathan
+Liebers, who supervised the thesis and wrote a large part of the code. The
+commit history is kept in full and shows who contributed what.
+
+The folder `third_party/screen2vec/` contains the original Screen2Vec code by
+Li, Popowski, Mitchell and Myers under its Apache-2.0 licence; see the
+[`NOTICE.md`](third_party/screen2vec/NOTICE.md) there.

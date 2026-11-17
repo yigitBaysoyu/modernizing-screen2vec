@@ -10,6 +10,7 @@ __pycache__/*
 .DS_Store
 embeddings.csv
 *.png
+!docs/*.png
 /adapter_model_out*
 /reconstructions*
 
