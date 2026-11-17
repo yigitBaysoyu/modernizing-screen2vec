@@ -48,7 +48,7 @@ Li, Popowski, Mitchell and Myers under its Apache-2.0 licence; see the
 | Section 4.4 and Table 4.1, adapter and training settings | `2_train_adapter.py`, launched by `2_train_adapter_amplitude.sh` through `hpc/_hpc5_start_adapter_and_reconstruction.py` and `hpc/_hpc7_qwen3_4b_64x4096_all_in_one.py` | – |
 | Section 4.4, decoding | `3_json_reconstruction_par.py` | `run_manifests/` (one file per run: adapter, embeddings, token limit, date); the decoded outputs are not included (see below) |
 | Table 4.2, metrics, JSON repair and loop collapse | `reconstruction_metrics.py`, `repair_rescore.py` | – |
-| Section 4.4, whitelist and blacklist | `screen_observability.py`, `_results_screen_observability.ipynb` | `screen_observability.csv`, `screen_observability.meta.json`, `graphics/screen_observability/` |
+| Section 4.4, allowlist and disallowlist (named `whitelist` and `blacklist` in the code and data files) | `screen_observability.py`, `_results_screen_observability.ipynb` | `screen_observability.csv`, `screen_observability.meta.json`, `graphics/screen_observability/` |
 | Tables 5.1, 5.2, 5.3, A.1, A.2; Figures 5.1, 5.2 | `_results_reconstruction.ipynb`, `_results_reconstructions_boxplots.ipynb` | `graphics/qwen3_repaired_boxplot_metrics.csv.gz` (the repaired per-screen scores of all fifteen adapters), `graphics/qwen3_adapter_validation_ids.csv.gz` (the validation split) |
 | Figure 5.3, example screen | `_results_reconstructions_viz.ipynb` | recorded in the notebook |
 | Section 4.5 and Table 4.3, projector and LSTM | `9_train_joint.py` | training logs in the four `_results_sequence_prediction_*.ipynb` |
@@ -112,7 +112,7 @@ commands of the sweep.
 
 ## Limits of reproducibility
 
-These are stated in Section 4.6 of the thesis and repeated here:
+These are stated in Section 4.7 of the thesis and repeated here:
 
 - `requirements.txt` pins no library versions. `requirements-recorded.txt` lists
   the versions installed on the development machine, where the four
