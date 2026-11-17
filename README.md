@@ -53,6 +53,20 @@ Reconstruction scores are the scores after JSON repair and loop collapse.
 *One validation screen (a), its cleaned hierarchy (b), and what the 1.7B decoder
 (c–f) and the 4B decoder (g–j) write back from 1, 4, 16 and 64 vectors.*
 
+Screen prediction against the Screen2Vec paper (strict protocol, Table 5.4 of the
+thesis):
+
+| Model | Top-1 | Top-0.01% | Top-0.1% | Top-1% | Top-5% |
+|---|---|---|---|---|---|
+| Screen2Vec, best row in the paper (EUCLIDEAN, spatial info) | 0.061 | 0.258 | 0.969 | 0.998 | 1.00 |
+| Best baseline in the paper (TextOnly) | 0.012 | 0.055 | 0.196 | 0.439 | 0.643 |
+| **This thesis, with the app half** | **0.118** | **0.500** | **0.992** | **0.999** | **1.000** |
+| This thesis, screen vector alone | 0.070 | 0.244 | 0.653 | 0.916 | 0.978 |
+
+The paper's Screen2Vec row carries the app half and its baselines do not, so each
+thesis row is compared with the matching row. The setups differ in other ways as
+well (Section 4.6 of the thesis).
+
 ## Where each thesis result comes from
 
 | Thesis | Code | Recorded result |
